@@ -1,0 +1,2486 @@
+---
+title: "Análisis y clusterización de una campaña de marketing"
+description: |
+  Aplicando técnicas de reducción de dimensiones y métodos de clustering a marketing_campaign.csv
+author:
+  - name: Iván González y Qiqi Zhou
+    affiliation: Universidad Complutense de Madrid
+    affiliation_url: https://ucm.es
+date: "`r Sys.Date()`"
+output:
+    distill::distill_article:
+        highlight: kate
+        colorlinks: true
+        code_folding: false
+        toc: true            
+        toc_depth: 3     
+editor_options: 
+  markdown: 
+    wrap: sentence
+---
+
+```{r setup, include = FALSE}
+# Ajuste comunes de los chunk
+knitr::opts_chunk$set(message = FALSE, warning = FALSE,
+                      echo = TRUE, res = 400)
+```
+
+# Objetivo
+
+El objetivo de esta práctica es **definir y acotar** las distintas **tipologías de cliente** a las que presta servicio esta empresa con el fin de **lograr maximizar su beneficio** en su **próxima campaña de marketing**.
+
+# Paquetes necesarios
+
+Necesitaremos los siguientes paquetes:
+
+```{r paquetes}
+# Borramos el entorno
+rm(list = ls())
+
+# Paquetes
+library(tidymodels) # Depuración datos
+library(tidyverse) # Modelos
+library(outliers) # Outliers
+library(performance)
+library(ggthemes)
+library(ggrepel)
+library(lubridate)
+library(stats)
+library(factoextra)
+library(plotly)
+library(cluster)
+library(dendextend)
+library(rfm)
+library(mclust)
+library(viridis)
+library(Rmisc)
+```
+
+# Datos
+
+Los datos que usaremos provienen del dataset **marketing_campaign.csv**.
+
+```{r}
+# Cargamos el dataset
+marketing_bruto <- read_delim(file = "./marketing_campaign.csv", delim = ";")
+```
+
+# Análisis exploratorio preliminar
+
+Antes de tomar cualquier decisión con los datos, lo primero que haremos será **echar un vistazo numérico** a cómo se comportan las variables.
+Comprobaremos fundamentalmente **cómo se relacionan** nuestras **variables cuantitativas y cualitativas** entre ellas y con la/s **objetivo/s**.
+
+## Variables
+
+```{r}
+glimpse(marketing_bruto)
+```
+
+|       Variable        |                              Significado                               |      Variable       |                                Significado                                 |
+|:----------------:|:-----------------:|:----------------:|:----------------:|
+|    `AcceptedCmp1`     | 1 si el cliente aceptó la oferta en la 1ª campaña, 0 en caso contrario |   `AcceptedCmp2`    |   1 si el cliente aceptó la oferta en la 2ª campaña, 0 en caso contrario   |
+|    `AcceptedCmp3`     | 1 si el cliente aceptó la oferta en la 3ª campaña, 0 en caso contrario |   `AcceptedCmp4`    |   1 si el cliente aceptó la oferta en la 4ª campaña, 0 en caso contrario   |
+|    `AcceptedCmp5`     | 1 si el cliente aceptó la oferta en la 5ª campaña, 0 en caso contrario |     `Response`      | 1 si el cliente aceptó la oferta en la última campaña, 0 en caso contrario |
+|      `Complain`       |             1 si el cliente se quejó en los últimos 2 años             |    `DtCustomer`     |               fecha de inscripción del cliente en la empresa               |
+|      `Education`      |                     nivel de educación del cliente                     |      `Marital`      |                          estado civil del cliente                          |
+|       `Kidhome`       |            número de niños pequeños en el hogar del cliente            |     `Teenhome`      |               número de adolescentes en el hogar del cliente               |
+|       `Income`        |                 ingresos anuales del hogar del cliente                 |  `MntFishProducts`  |     cantidad gastada en productos de pescadería en los últimos 2 años      |
+|   `MntMeatProducts`   |      cantidad gastada en productos cárnicos en los últimos 2 años      |     `MntFruits`     |       cantidad gastada en productos de frutas en los últimos 2 años        |
+|  `MntSweetProducts`   |       cantidad gastada en productos dulces en los últimos 2 años       |     `MntWines`      |     cantidad gastada en productos vitivinícolas en los últimos 2 años      |
+|    `MntGoldProds`     |        cantidad gastada en productos oro en los últimos 2 años         | `NumDealsPurchases` |                 número de compras realizadas con descuento                 |
+| `NumCatalogPurchases` |          número de compras realizadas utilizando el catálogo           | `NumStorePurchases` |            número de compras realizadas directamente en tiendas            |
+|   `NumWebPurchases`   |   número de compras realizadas a través del sitio web de la empresa    | `NumWebVisitsMonth` |       número de visitas al sitio web de la empresa en el último mes        |
+|       `Recency`       |                 número de días desde la última compra                  |                     |                                                                            |
+
+## Distribución de nuestras variables de referencia
+
+El objetivo será **clasificar y agrupar las distintas tipologías de clientes** que hay en el dataset.
+Concretamente, nosotros hemos optado por definir esas tipologías en función de **tres parámetros**: el **nivel económico** del cliente, el **nivel total de gasto** del cliente en la empresa, y la **antigüedad** del propio cliente, esto es, el **número de meses** que lleva comprando con mayor o menor intermitencia en la empresa.
+En primer lugar comprobaremos cómo se **distribuyen los valores de estas variables**.
+
+### Nivel económico del cliente
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+marketing_bruto |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Income)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución de la renta de los clientes de la empresa", x = "Income", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+```
+
+Como se puede observar, la masa probabilística del gráfico de distribución es muy **simétrica**.
+La **media**, en este caso bastante representativa, se encontraría en torno a los **50 000 \$ dólares al año por cliente**.
+Para evitar distorsiones en el gráfico, se han filtrado distintos **valores outliers de rentas por encima de los 200 000 \$ al año**.
+En concreto, encontramos un gran y afortunado outlier de **más de 600 000 \$ de renta al año**.
+
+### Nivel de gasto del cliente
+
+```{r}
+marketing <- 
+  marketing_bruto |> 
+  mutate(TotSpent = MntFishProducts + MntMeatProducts + MntFruits + 
+           MntSweetProducts + MntWines + MntGoldProds,
+         TotPurchases = NumCatalogPurchases + NumStorePurchases + 
+           NumWebPurchases)
+```
+
+En segundo lugar, para poder entender de una manera más general el **nivel de gasto** de cada tipología de cliente lo que haremos será crear **dos nuevas variables desde un inicio**: el **sumatorio de las compras totales** y el **sumatorio del gasto total** en la empresa por cada cliente.
+Dado que ambas variables van a estar **muy correlacionadas**, para evitar posteriores **problemas de colinealidad**, una vez hecho el análisis exploratorio de todas las variables, **nos desharemos de una de las dos** (probablemente la que menor correlación mantenga con el resto de variables).
+Para disponer rápidamente de una **panorámica general del gasto por cliente**, veamos como se distribuyen estas dos variables:
+
+```{r layout = "l-body-outset", fig.width = 13, fig.asp = .9}
+b1 <- marketing |> 
+  ggplot(aes(x = TotSpent)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución del gasto total en productos de la compañía", x = "Gasto total", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+
+b2 <- marketing |> 
+  ggplot(aes(x = TotPurchases)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución de compras totales en productos de la compañía", x = "Compras totales", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(TotPurchases, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(TotPurchases, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+
+Rmisc::multiplot(b1, b2)
+```
+
+Para el **gasto total** encontramos un **máximo** alrededor de los **50 dólares**.
+A partir de este punto, la distribución se **estabiliza**.
+La **media** respecto del gasto total estaría en torno a los **600 \$**, mientras que la **mediana** estaría en torno a los **400 \$**.
+Para el número de **compras totales**, el **máximo total** se encuentra en torno a los **5 productos**.
+Encontramos un segundo **máximo relativo** en torno a los **18 productos** por cliente.
+La **media** respecto de las compras totales estaría en torno a los **13 productos**, mientras que la **mediana** estaría en torno a los **12 productos**.
+En la próxima sección veremos **cómo se relacionan estas variables con el resto** y **cuál de ellas dos nos aporta finalmente mayor información**.
+
+### Nivel de antigüedad del cliente
+
+```{r}
+marketing <- 
+  marketing |> 
+  mutate(Seniority = 
+           interval(ymd(20120730), ymd(marketing_bruto$Dt_Customer)) / months(1))
+```
+
+Para esta última variable calcularemos a partir de la variable `Dt_Customer` la antigüedad del cliente, esto es, el **número de meses** que lleva comprando con mayor o menor intermitencia en la empresa.
+Grafiquemos esta cuestión para hacernos una idea general del dataset.
+
+```{r layout = "l-body-outset", fig.width = 13, fig.asp = .9}
+marketing |> 
+  ggplot(aes(x = Seniority)) +
+  geom_density(alpha = .8, fill="#EB9891") +
+  labs(title = "Distribución de la antigüedad del cliente en la compañía (en meses)", x = "Meses", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_x_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  scale_y_continuous(labels = comma_format(big.mark = " ", decimal.mark = ",")) +
+  geom_vline(aes(xintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) +
+  geom_vline(aes(xintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted"))
+```
+
+Como se puede observar, la distribución de la nueva variable `Seniority` es **muy simétrica**.
+Nos encontramos con prácticamente el mismo número de clientes para cada nivel de antigüedad.
+La media en cuanto a la antigüedad de los clientes en este dataset estaría en torno a los **11-12 meses**.
+
+# Fase 1: Exploración de los datos
+
+## Problemas de codificación
+
+Tras esta pequeña aproximación a las principales variables de nuestro dataset, comienza la **primera fase** de la metodología SEMMA para el depurado de nuestros datos.
+En este primer apartado observaremos *grosso modo* si existen problemas de **codificación** en el dataset.
+Lo primero que comprobaremos en relación a estos problemas de codificación será el **número total de valores nulos por cada variable**.
+
+```{r}
+ausentes <- 
+  apply(marketing_bruto, 2, function(x) sum(is.na(x)))
+
+ausentes_tb <- 
+  tibble(Variable = names(marketing_bruto), Ausentes = ausentes) |> 
+  filter(Ausentes > 0)
+ausentes_tb
+```
+
+Como se puede observar en la tabla, tan solo la variable `Income` presenta **valores ausentes** (por el momento), concretamente **24**.
+Posteriormente veremos que hacer con ellos: en función de la **distribución** de la variable será más conveniente **imputarles la media o la mediana**, al ser `Income` una variable **numérica continua**.
+
+```{r}
+b1 <- marketing_bruto |> 
+  dplyr::count(Z_CostContact)
+b2 <-marketing_bruto |> 
+  dplyr::count(Z_Revenue)
+cbind(b1, b2)
+```
+
+Además, como se puede observar en la tabla, existen dos variables (`Z_CostContact`, `Z_Revenue`) que no aportan **ninguna información** porque adoptan **un único valor para todas las filas**.
+Procederemos a **eliminarlas** directamente.
+
+```{r}
+marketing <- 
+  marketing |> 
+  select(-c(Z_CostContact, Z_Revenue))
+```
+
+## Variables tipo texto, variables tipo fecha, variables numéricas y factores
+
+Tras ello, comprobaremos que todas las variables estén codificadas en su **tipología correcta**: debemos decidir si las variables tipo texto son realmente **variables cualitativas** (factores).
+
+```{r}
+marketing_bruto |>  
+  select(where(is.numeric)) |>
+  glimpse()
+```
+
+Todas las variables tipo texto representan **categorías de una cualitativa**, por lo que las convertimos todas ellas a **factor**.
+
+```{r}
+marketing <- 
+  marketing |>
+  mutate_if(~is.character(.), as.factor)
+marketing |> 
+  glimpse()
+```
+
+## Factores ordinales
+
+La variable `Education`, además de **factor**, también puede seguir una **jerarquía** ordinal: `Basic` \< `2n Cycle` \< `Graduation` \< `Master` \< `PhD`.
+De esta manera, ordenaríamos a los clientes en función de su **nivel educativo**.
+
+```{r}
+marketing |> 
+  dplyr::count(Education)
+marketing <-
+  marketing |>
+  mutate(Education = factor(Education, levels = c("Basic", "2n Cycle", "Graduation", "Master", "PhD"),
+                       ordered = TRUE))
+```
+
+## Variables cuantitativas
+
+Una vez asignado a cada variable su **tipología** correspondiente, pasaremos a analizar las **variables cuantitativas** del dataset.
+Se analizará ante todo cómo **afecta** cada variable a nuestras tres **variables de referencia** `TotSpent`, `Income` y `Seniority`.
+Este análisis servirá, ante todo, para **recategorizar las variables numéricas** y limpiar así el dataset.
+
+### Variable ID
+
+```{r}
+marketing |> 
+  summarise(min_lead = min(ID), max_lead = max(ID))
+```
+
+Como se puede observar, la variable `ID` es un **id del número del cliente** que se incluye en el dataset.
+No está ordenada.
+Como **no tiene interés** alguno a fin clasificar la tipología de los clientes, en la fase de modificación **eliminaremos** esta variable.
+
+### Variable Year_Birth
+
+```{r}
+marketing |> 
+  summarise(min_lead = min(Year_Birth), max_lead = max(Year_Birth))
+```
+
+Como se puede observar, la variable `Year_Birth` incluye registros de individuos que nacieron en un **rango de edad** desde el año **1893** hasta el año **1996**.
+
+Como el año de nacimiento en sí **no nos aporta mucho**, vamos a modificar esta variable para que nos cuantifique la edad del individuo.
+Lo que haremos será restar el año actual, **2022**, al año de nacimiento del individuo (`Year_Birth`):
+
+```{r}
+marketing <-
+  marketing |> 
+  mutate(Age = 2023 - Year_Birth) 
+```
+
+Con la entrada de `Age`, borraremos la anterior variable `Year_Birth` y `Dt_Customer`:
+
+```{r}
+marketing <-
+  marketing |> 
+  select(-c(Year_Birth, Dt_Customer))
+```
+
+Ahora sí, veamos **cuál es el peso sobre el total de cada una de las edades**.
+
+```{r}
+marketing |>
+  dplyr::count(Age, sort = TRUE) |> 
+  mutate(porc = 100*n/sum(n), cumul = cumsum(porc))
+```
+
+La **gran mayoría** de registros pertenecen a individuos con edades **desde los 35 hasta los 60 años**.
+A partir de los **60** y con edades inferiores a los **35**, el número de registros **disminuye** progresivamente.
+Además, se pueden observar posibles errores en la introducción de los datos:
+
+-   Hay tres registros con edades máximas de **113, 114 y 121 años**. Los tomaremos como **outliers** y les imputaremos **la media o la mediana**.
+-   Hay otros tres registros con edades mínimas de **16 y 17 años**. Presuponemos que la mayoría de edad son los 18 años y que, para registrarte en esta empresa, necesitas haberla alcanzado. De nuevo, los tomaremos como **outliers** y les imputaremos **la media o la mediana**.
+
+Grafiquemos ahora su relación con nuestras variables de referencia: el **gasto total** por cliente en la compañía (`TotSpent`), su **nivel económico** (`Income`), y su nivel de **antigüedad** (`Seniority`).
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+b1 <- marketing[!is.na(marketing$TotSpent), ] |> 
+  filter(Age < 100) |> 
+  ggplot(aes(x = Age, y = TotSpent)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Age < 100) |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Age, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(Age < 100) |> 
+  ggplot(aes(x = Age, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, cols = 2)
+```
+
+Algunas apreciaciones a la luz de los gráficos:
+
+-   En el primer y segundo gráfico podemos observar como la edad **no parece ser determinante** a la hora de considerar el **gasto total**(`TotSpent`) **ni la antigüedad** (`Seniority`) **del cliente**. Si bien parece existir cierta **correlación positiva** entre ambas variables (a mayor edad, mayor gasto total y mayor antigüedad), la realidad es que podemos encontrar tanto personas jóvenes como adultas con gastos totales y antigüedades bajas y altas. Quizá sí que se pueda observar una mayor concentración de puntos para gastos totales altos en clientes de mayor edad, pero puede ser también debido a un mayor número de registros para esas edades (recordemos que para clientes con edades inferiores a los 35 años el número de registros se reducía exponencialmente).
+-   En el tercer gráfico podemos observar como la edad **correlaciona de una manera más positiva** que con las anteriores variables a la hora de considerar el **nivel económico del cliente**. Esta conclusión es muy coherente: **el nivel económico de los clientes incrementa a la par que lo hace su edad**, aunque tampoco de una manera excesiva, pues encontramos también personas jóvenes (\< 30 años) que alcanzan rentas bastante elevadas, **superiores a los 70 000 \$ al año**.
+
+### Variable Income
+
+```{r}
+marketing |> 
+  drop_na(Income) |> 
+  summarise(min_lead = min(Income), max_lead = max(Income))
+```
+
+Como se puede observar, la variable `Income` incluye registros de individuos que cobran desde **1730 \$** hasta **666 666 \$** al año (este último un outlier seguramente).
+Grafiquemos ahora su relación con nuestras otras dos variables de referencia: el **gasto total** por cliente en la compañía (`TotSpent`), y su nivel de **antigüedad** (`Seniority`).
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+b1 <- marketing[!is.na(marketing$TotSpent), ] |> 
+  drop_na(Income) |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Income, y = TotSpent)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- marketing[!is.na(marketing$Seniority), ] |> 
+  drop_na(Income) |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Income, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2)
+```
+
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si nos fijamos en el primer diagrama de correlación, podremos observar como la variable `Income` **mantiene una correlación muy positiva** con la variable `TotSpent`, que medía el **gasto total** en la empresa por cliente. Encontramos, además, varios valores **outliers** que distorsionan en parte la correlación (en este caso, rentas superiores a los 150 000 \$ al año). En posteriores fases nos encargaremos de imputarles o la **media** o la **mediana** de su distribución. Esta correlación es muy coherente: **normalmente aquellos clientes con rentas más altas son las que gastan más en cómputo total**.
+-   Por contra, en el segundo diagrama de correlación podemos observar como el nivel de ingresos (`Income`) **no parece ser determinante** a la hora de considerar **la antigüedad** (`Seniority`) **del cliente**.
+
+### Variable Recency
+
+```{r}
+marketing |> 
+  drop_na(Recency) |> 
+  summarise(min_lead = min(Recency), max_lead = max(Recency))
+```
+
+Como se puede observar, la variable `Recency` incluye registros de individuos que llevan sin comprar desde **0** hasta **99 días**.
+Grafiquemos ahora su relación con nuestras variables de referencia: el **gasto total** por cliente en la compañía (`TotSpent`), su **nivel económico** (`Income`), y su nivel de **antigüedad** (`Seniority`).
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+b1 <- marketing[!is.na(marketing$TotSpent), ] |> 
+  ggplot(aes(x = Recency, y = TotSpent)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Recency, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- marketing[!is.na(marketing$Seniority), ] |> 
+  ggplot(aes(x = Recency, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, cols = 2)
+```
+
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si nos fijamos en el segundo diagrama de correlación, podremos observar como la variable `Recency` **mantiene una correlación negativa** con la variable `Seniority`, que medía la antigüedad del cliente en la empresa. A pesar de que es una correlación **bastante baja**, sí que podría ser indicativo de que en esta empresa **los clientes más veteranos no mantienen un nivel de compra más o menos homogéneo a lo largo del tiempo**. Posteriormente, una vez hecha la segmentación, podremos investigar esta situación con mayor información, pero por el momento esta correlación podría ser síntoma de que **los clientes con más antigüedad tienen facilidad por desligarse de la empresa**. Si esta situación finalmente es real, se deberían llevar a cabo **diferentes estrategias de recaptación** para **recuperar su fidelidad a la marca**.
+-   Por contra, si nos fijamos en el primer y tercer diagrama de correlación, podremos observar como la variable `Recency` **no parece mantener correlaciones de ningún tipo** con las variables `TotSpent` e `Income`. De esta manera, los días que han pasado desde la última compra de un cliente **no parecen tener una influencia significativa** sobre el gasto total de ese mismo cliente en la empresa o sobre su nivel económico.
+
+### Variable Complain
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(TotSpent ~ Complain, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$Complain))) |> 
+  ggplot(aes(x = Complain, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Complain",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b2 <- aggregate(Income ~ Complain, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Complain))) |> 
+  ggplot(aes(x = Complain, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Complain",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b3 <- aggregate(Seniority ~ Complain, marketing[!is.na(marketing$Seniority), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Seniority), ]$Complain))) |> 
+  ggplot(aes(x = Complain, y = Seniority)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Complain",y = "Seniority") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+Rmisc::multiplot(b1, b2, b3, cols = 2)
+```
+
+La variable `Complain` presenta dos categorías, aunque tan solo una de ellas acapara la mayoría de los registros.
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si observamos el gráfico de barras que relaciona la variable `Complain` con `TotSpent`, podemos observar cómo los individuos que alguna vez se han quejado han gastado, en media, **mucho menos que aquellos que no lo hicieron**. Esto puede resultar evidente: en el momento en el que alguien tiene una mala experiencia con una empresa no suele volver. Sin embargo, la empresa sí que podría lanzar estrategias a fin de **reenganchar a este tipo de clientes**, mejorando su atención posventa, restituyendo de alguna manera el mal causado al cliente, etc.
+-   Si observamos el gráfico de barras que relaciona la variable `Complain` con `Seniority`, podemos observar cómo los individuos que alguna vez se han quejado suelen ser aquellos que llevan **menos tiempo inscritos como clientes en la empresa**. Esta conclusión también resulta evidente.
+-   Si observamos el gráfico de barras que relaciona la variable `Complain` con `Income`, podemos observar cómo en este caso **no hay tanta diferencia entre ambas categorías**. Podríamos concluir que el **nivel económico del individuo no influye** demasiado en el hecho de quejarse o no por el servicio prestado.
+
+### Variables Kidhome y Teenhome
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(TotSpent ~ Kidhome, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$Kidhome))) |> 
+  ggplot(aes(x = Kidhome, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Kidhome",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- aggregate(Income ~ Kidhome, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Kidhome))) |> 
+  ggplot(aes(x = Kidhome, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Kidhome",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- aggregate(Seniority ~ Kidhome, marketing[!is.na(marketing$Seniority), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Seniority), ]$Kidhome))) |> 
+  ggplot(aes(x = Kidhome, y = Seniority)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Kidhome",y = "Seniority") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b4 <- aggregate(TotSpent ~ Teenhome, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$Teenhome))) |> 
+  ggplot(aes(x = Teenhome, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Teenhome",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b5 <- aggregate(Income ~ Teenhome, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Teenhome))) |> 
+  ggplot(aes(x = Teenhome, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Teenhome",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b6 <- aggregate(Seniority ~ Teenhome, marketing[!is.na(marketing$Seniority), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Seniority), ]$Teenhome))) |> 
+  ggplot(aes(x = Teenhome, y = Seniority)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Teenhome",y = "Seniority") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, b4, b5, b6, cols = 2)
+```
+
+Las variables `Kidhome` y `Teenhome` presentan tres categorías bastante distribuidas.
+Algunas apreciaciones a la luz de los gráficos:
+
+-   En primer lugar, respecto de la variable `Kidhome`, encontramos diferencias bastante significativas entre categorías en función del gasto total por cliente. Podemos observar como **los clientes que no tienen hijos quintuplican el gasto total en comparación con aquellos que sí los tienen**. Esto puede ser debido a que, como se puede observar también en el segundo gráfico de la primera columna, la mayoría de clientes **sin hijos** son los que poseen **rentas más altas** y, por ende, **mayor capacidad de gasto**.
+-   En segundo lugar, respecto de la variable `Teenhome`, las diferencias **no son prácticamente significativas** entre sus categorías para ninguna de nuestras variables de referencia.
+
+A la vista de lo comentado, se optará en la fase de **recategorización** por sustituir a la variable `Kidhome` por una variable binaria que contabilice simplemente si el cliente tiene o no hijos.
+Por otro lado, sumaremos a `Kidhome` la variable `Teenhome` para determinar el número de niños que hay en la familia.
+
+### Variables relacionadas con el número de compras a la empresa a través de distintos medios
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(TotSpent ~ NumDealsPurchases, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$NumDealsPurchases))) |> 
+  ggplot(aes(x = NumDealsPurchases, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "NumDealsPurchases",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- aggregate(TotSpent ~ NumWebPurchases, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$NumWebPurchases))) |> 
+  ggplot(aes(x = NumWebPurchases, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "NumWebPurchases",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- aggregate(TotSpent ~ NumCatalogPurchases, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$NumCatalogPurchases))) |> 
+  ggplot(aes(x = NumCatalogPurchases, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "NumCatalogPurchases",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b4 <- aggregate(TotSpent ~ NumStorePurchases, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$NumStorePurchases))) |> 
+  ggplot(aes(x = NumStorePurchases, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "NumStorePurchases",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b5 <- aggregate(TotSpent ~ NumWebVisitsMonth, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$NumWebVisitsMonth))) |> 
+  ggplot(aes(x = NumWebVisitsMonth, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "NumWebVisitsMonth",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, b4, b5, cols = 2)
+```
+
+Las variables `NumDealsPurchases`, `NumWebPurchases`, `NumCatalogPurchases`, `NumStorePurchases` y `NumWebVisitsMonth` presentan entre doce y quince categorías.
+Algunas apreciaciones a la luz de los gráficos:
+
+Para la mayoría de variables, `TotSpent` correlaciona de manera positiva (como es obvio): **a más compras a través de los distintos canales de la empresa, mayor es el nivel de gasto del cliente**.
+Por otro lado, resulta curioso comprobar como la variable `NumWebVisitsMonth` mantiene una correlación inversa con `TotSpent`.
+Parece que a más veces visita el cliente la web en el último mes, menor es su capacidad total de gasto en la empresa.
+Investigaremos esta cuestión en epígrafes posteriores.
+
+### Variables relacionadas con las campañas de marketing de la empresa
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(Income ~ AcceptedCmp1, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$AcceptedCmp1))) |> 
+  ggplot(aes(x = AcceptedCmp1, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "AcceptedCmp1",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b2 <- aggregate(Income ~ AcceptedCmp2, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$AcceptedCmp2))) |> 
+  ggplot(aes(x = AcceptedCmp2, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "AcceptedCmp2",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b3 <- aggregate(Income ~ AcceptedCmp3, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$AcceptedCmp3))) |> 
+  ggplot(aes(x = AcceptedCmp3, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "AcceptedCmp3",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b4 <- aggregate(Income ~ AcceptedCmp4, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$AcceptedCmp4))) |> 
+  ggplot(aes(x = AcceptedCmp4, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "AcceptedCmp4",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b5 <- aggregate(Income ~ AcceptedCmp5, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$AcceptedCmp5))) |> 
+  ggplot(aes(x = AcceptedCmp5, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "AcceptedCmp5",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+b6 <- aggregate(Income ~ Response, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Response))) |> 
+  ggplot(aes(x = Response, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Response",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) +
+  scale_x_discrete(limits=c(0,1))
+
+Rmisc::multiplot(b1, b2, b3, b4, b5, b6, cols = 2)
+```
+
+Las variables `AcceptedCmp1`, `AcceptedCmp2`, `AcceptedCmp3`, `AcceptedCmp4`, `AcceptedCmp5` y `Response` son binarias y se encuentran bastante desbalanceadas.
+Algunas apreciaciones a la luz de los gráficos:
+
+Todas estas variables recogían información acerca de la **cantidad de clientes que habían aceptado las ofertas que había lanzado la empresa durante las diferentes campañas de marketing**.
+Como podemos observar, todas estas variables **no correlacionan demasiado bien** con nuestras variables de referencia: las dos categorías de cada una de las variables se encuentran muy igualadas, y **no se atisban diferencias que puedan enriquecer de alguna manera la futura identificación de las distintas tipologías de cliente** que se encuentran inmersas en el dataset.
+Por este motivo, se ha decidido **eliminar** también este tipo de variables.
+
+### Variables relacionadas con cantidades gastadas en determinados productos
+
+```{r}
+sum1 <- marketing |> 
+  summarise(Variable = "MntWines", min_lead = min(MntWines), max_lead = max(MntWines))
+
+sum2 <- marketing |> 
+  summarise(Variable = "MntFruits", min_lead = min(MntFruits), max_lead = max(MntFruits))
+
+sum3 <- marketing |> 
+  summarise(Variable = "MntMeatProducts", min_lead = min(MntMeatProducts), max_lead = max(MntMeatProducts))
+
+sum4 <- marketing |> 
+  summarise(Variable = "MntFishProducts", min_lead = min(MntFishProducts), max_lead = max(MntFishProducts))
+
+sum5 <- marketing |> 
+  summarise(Variable = "MntSweetProducts", min_lead = min(MntSweetProducts), max_lead = max(MntSweetProducts))
+
+sum6 <- marketing |> 
+  summarise(Variable = "MntGoldProds", min_lead = min (MntGoldProds), max_lead = max(MntGoldProds))
+
+rbind(sum1, sum2, sum3, sum4, sum5, sum6)
+```
+
+Estas seis variables miden la **cantidad gastada en determinados productos** por cada cliente en los últimos 2 años.
+Las seis variables toman el **valor 0** cuando el cliente no ha comprado ese producto en concreto en los últimos dos años.
+Grafiquemos ahora su relación con dos de nuestras variables de referencia: el **nivel económico** del cliente (`Income`), y su nivel de **antigüedad** (`Seniority`).
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+b1 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000)  |>  
+  filter(MntWines > 0) |> 
+  ggplot(aes(x = MntWines, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |>  
+  filter(MntFruits > 0) |> 
+  ggplot(aes(x = MntFruits, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |>  
+  filter(MntMeatProducts > 0) |> 
+  ggplot(aes(x = MntMeatProducts, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b4 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |>  
+  filter(MntFishProducts > 0) |> 
+  ggplot(aes(x = MntFishProducts, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b5 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |>  
+  filter(MntSweetProducts > 0) |> 
+  ggplot(aes(x = MntSweetProducts, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b6 <- marketing[!is.na(marketing$Income), ] |> 
+  filter(Income < 150000) |>  
+  filter(MntGoldProds > 0) |> 
+  ggplot(aes(x = MntGoldProds, y = Income)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, b4, b5, b6, cols = 2)
+```
+
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si se observan los gráficos de correlaciones, todos los tipos de productos mantienen **correlaciones muy positivas** con el **nivel económico** del cliente, aunque algunos más que otros (como es normal, a mayor renta, mayor gasto en cada uno de los sectores de la empresa). Curiosamente, la variable `MntGoldProds` es la que mantiene una correlación más baja con `Income`, a pesar de que, *a priori*, se pudiese pensar que este tipo de productos (normalmente considerados de lujo) lo comprarían principalmente personas con rentas más altas.
+-   Por otro lado, variables como `MntFruits` o `MntFishProducts` tienen también **correlaciones más bajas** porque se tratan de productos básicos que cualquier cliente, en mayor o menor medida, **siempre va a tratar de comprar**.
+
+Veamos ahora su influencia sobre la variable `Seniority`.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+b1 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntWines > 0) |> 
+  ggplot(aes(x = Seniority, y = MntWines)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntFruits > 0) |> 
+  ggplot(aes(x = MntFruits, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntMeatProducts > 0) |> 
+  ggplot(aes(x = MntMeatProducts, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b4 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntFishProducts > 0) |> 
+  ggplot(aes(x = MntFishProducts, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b5 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntSweetProducts > 0) |> 
+  ggplot(aes(x = MntSweetProducts, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b6 <- marketing[!is.na(marketing$Seniority), ] |> 
+  filter(MntGoldProds > 0) |> 
+  ggplot(aes(x = MntGoldProds, y = Seniority)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, b4, b5, b6, cols = 2)
+```
+
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si se observan los gráficos de correlaciones, todos los tipos de productos mantienen **correlaciones bastante negativas** con la **antigüedad** del cliente. **A más tiempo pasa desde que el cliente se inscribe como cliente en la empresa, menor es su gasto en cada sector**.
+
+### Colinealidad
+
+Antes de continuar con el resto de variables, comprobaremos los posibles **problemas de colinealidad** entre las numéricas con tal de **eliminar** las que repitan información.
+También, al tener **variables continuas** como objetivo, comprobaremos cuáles de las numéricas tienen una **mayor correlación con ellas** con tal de **mantenerlas** y **analizarlas en profundidad**.
+
+```{r}
+library(corrr)
+cor_matrix <- 
+  marketing |> select(where(is.numeric)) |> cor(use = "pairwise.complete.obs", method = "pearson")
+```
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+library(corrplot)
+cor_matrix |>
+  corrplot(method = "number", tl.cex = 0.55, number.cex = 0.7, type = "lower")
+```
+
+En primer lugar, conviene recordar en este punto cómo las variables `TotSpent`, `Income` y `Seniority` iban ser las **determinantes a la hora de identificar las distintas tipologías de cliente**.
+Podemos observar como, de estas tres variables, `TotSpent` e `Income` son las que **mayores correlaciones mantienen con el resto**.
+Para el caso de `Seniority` las correlaciones son menores, pero en este caso **negativas**.
+Ello hace que pueda resultar interesante mantenerla porque actúa en cierta manera como **penalizadora** sobre el resto de variables del dataset.
+
+Por otro lado, como se comentó en un inicio, las variables `TotSpent` y `TotPurchases` son **muy similares** y mantienen una **alta correlación** (0.82 puntos), por lo que habremos de deshacernos de una de ellas.
+Como `TotPurchases` mantiene correlaciones inferiores con el resto de variables del dataset, nos decidiremos por **eliminarla**.
+El resto de variables las mantendremos tal y como están **hasta la fase de modificación**.
+
+```{r}
+marketing <- 
+  marketing |> 
+  select(-TotPurchases)
+```
+
+## Variables cualitativas
+
+A continuación analizaremos y agruparemos las **variables cualitativas** del dataset.
+
+### Variable Education
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(TotSpent ~ Education, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$Education))) |> 
+  ggplot(aes(x = Education, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Education",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- aggregate(Income ~ Education, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Education))) |> 
+  ggplot(aes(x = Education, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Education",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- aggregate(Seniority ~ Education, marketing[!is.na(marketing$Seniority), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Seniority), ]$Education))) |> 
+  ggplot(aes(x = Education, y = Seniority)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Education",y = "Seniority") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, cols = 2)
+```
+
+La variable `Education` presenta cinco categorías, aunque una de ellas acapara la mayoría de los registros.
+Algunas apreciaciones a la luz de los gráficos:
+
+-   Si observamos el gráfico de barras que relaciona la variable `Education` con `TotSpent`, podemos observar una clara diferencia en el gasto total entre los clientes con estudios de pregrado y de posgrado: los **estudiantes de pregrado gastan, en media, un 50-55 % menos que los estudiantes de posgrado**. Esto puede ser debido, fundamentalmente, a que **los clientes de pregrado quizá no tengan la solvencia económica que sí que puede tener un estudiante de posgrado en edad de trabajar**.
+-   Si observamos el gráfico de barras que relaciona la variable `Education` con `Seniority`, podemos observar cómo esta vez la diferencia se encuentra fundamentalmente en la categoría `Basic`. **La gran mayoría de individuos que llevan poco tiempo inscritos como clientes en la empresa pertenecen a esa categoría**.
+-   Por último, si observamos el gráfico de barras que relaciona la variable `Education` con `Income`, podemos observar cómo de nuevo la diferencia se encuentra fundamentalmente en la categoría `Basic`. Se puede observar una **importante brecha salarial** entre individuos con **estudios elementales** e individuos con **estudios más avanzados**.
+
+A la vista de lo comentado y de la evidente **brecha pregrado-posgrado** respecto de nuestras variables de referencia, se optará en la fase de **recategorización** por transformar la variable `Education` en una variable binaria que distinga únicamente entre **estudios de pregrado** y **estudios de posgrado**.
+
+### Variable Marital_Status
+
+```{r layout="l-body-outset", fig.width=17, fig.asp = .99}
+b1 <- aggregate(TotSpent ~ Marital_Status, marketing[!is.na(marketing$TotSpent), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$TotSpent), ]$Marital_Status))) |> 
+  ggplot(aes(x = Marital_Status, y = TotSpent)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(TotSpent, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(TotSpent, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Marital_Status",y = "TotSpent") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b2 <- aggregate(Income ~ Marital_Status, marketing[!is.na(marketing$Income), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Income), ]$Marital_Status))) |> 
+  ggplot(aes(x = Marital_Status, y = Income)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Income, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Income, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Marital_Status",y = "Income") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+b3 <- aggregate(Seniority ~ Marital_Status, marketing[!is.na(marketing$Seniority), ], median) |>
+  mutate(n = pull(count(marketing[!is.na(marketing$Seniority), ]$Marital_Status))) |> 
+  ggplot(aes(x = Marital_Status, y = Seniority)) +
+  geom_bar(stat = "identity", fill= "#56BCC2") +
+  geom_label(aes(label = n, y = 0.1)) +
+  geom_hline(aes(yintercept = mean(Seniority, na.rm = T), linetype = "Media"), colour = "black", size = .8) + 
+  geom_hline(aes(yintercept = median(Seniority, na.rm = T), linetype = "Mediana"), colour = "black", size = .8) +
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) +
+  labs(x = "Marital_Status",y = "Seniority") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+Rmisc::multiplot(b1, b2, b3, cols = 2)
+```
+
+La variable `Marital_Status` presenta ocho categorías, aunque cuatro de ellas acapara la mayoría de los registros.
+Algunas apreciaciones a la luz de los gráficos:
+
+-   La correlación de la variable `Marital_Status` respecto de nuestras tres variables de referencia es **prácticamente nula**. Las categorías que más destacan (`Absurd` respecto de `TotSpent`, o `Alone` respecto de `Seniority`) son **minoritarias sobre el total de los registros** y, por tanto, no son representativas del total de categorías. Para el resto de categorías, \*\*todas están igual de encasilladas en la mediana\*.
+
+A la vista de lo comentado, se optará en la fase de **recategorización** por transformarla en una variable binaria que distinga únicamente entre clientes **con pareja** o **sin pareja**.
+
+# Fase 2: Muestreo y modificación de los datos
+
+Tras la fase de exploración de los datos, continuaremos con las fases de **muestreo** y **modificación** de los datos.
+Dado que nuestro dataset contiene tan solo **2240 observaciones**, no será necesario realizar muestreo (nos quedaríamos prácticamente sin filas si lo hacemos).
+
+En segundo lugar, para la fase de **modificación** de los datos, consideraremos **dos apartados** principales.
+Uno primero en donde se ejecutarán las **modificaciones estructurales** que afecten a toda las base de datos (transformar variables a factores, problemas de codificación o de rango, variables que no aportan, creación de variables en general, etc.), y uno segundo en donde se llevarán a cabo aquellas **modificaciones** que afecten **a cada algoritmo en concreto** a modo de **receta** (normalización para la métrica, recategorización, tratamiento de outliers/ausentes, dummyficación, etc.).
+
+## Creación y recategorización de variables
+
+A parte de las variable `Age`, `TotSpent` y `Seniority`, que ya fueron **creadas en la fase de exploración**, a continuación **crearemos el resto de variables** que se han considerando relevantes para el análisis en la anterior fase.
+
+```{r}
+# Estado civil del cliente
+marketing <-
+  marketing |> 
+  dplyr::mutate(Marital_Status = 
+           if_else(Marital_Status == "Married" | 
+                  Marital_Status == "Together", 1, 0))
+
+# Nivel académico del cliente
+marketing <-
+  marketing |> 
+  dplyr::mutate(Education = 
+           if_else(Education == "Basic" | 
+                   Education == "2n Cycle", 0, 1))
+
+# Número de niños en la familia
+marketing <-
+  marketing |> 
+  dplyr::mutate(Children = Kidhome + Teenhome)
+
+# Número de individuos en la familia
+marketing <-
+  marketing |> 
+  dplyr::mutate(Family_Size = if_else(Marital_Status == 0, 1, 2) + Children)
+
+# ¿El cliente es padre o madre de familia?
+marketing <- 
+  marketing |> 
+  dplyr::mutate(Is_Parent = if_else(Children > 0, 1, 0))
+```
+
+## Cambios de nombre de variables
+
+**Cambiaremos el nombre** a algunas de las variables para que no den lugar a equivocación.
+
+```{r}
+marketing <-
+  marketing |> 
+  dplyr::rename(Wines = MntWines) |> 
+  dplyr::rename(Fruits = MntFruits) |> 
+  dplyr::rename(Meat = MntMeatProducts) |> 
+  dplyr::rename(Fish = MntFishProducts) |> 
+  dplyr::rename(Sweets = MntSweetProducts) |>
+  dplyr::rename(Gold = MntGoldProds)
+```
+
+## Eliminación de variables
+
+**Eliminamos** las variables comentadas en la fase previa de exploración.
+
+```{r}
+marketing <- 
+  marketing |> 
+  select(-c(ID, AcceptedCmp1, AcceptedCmp2, AcceptedCmp3, AcceptedCmp4, AcceptedCmp5, Complain, Response))
+```
+
+## Detección de outliers
+
+```{r}
+box1 <- 
+  ggplot(marketing, aes(Income)) +
+  geom_boxplot() +
+  theme_minimal()
+box2 <- 
+  ggplot(marketing, aes(Recency)) +
+  geom_boxplot() +
+  theme_minimal()
+box3 <- 
+  ggplot(marketing, aes(TotSpent)) +
+  geom_boxplot() +
+  theme_minimal()
+box4 <- 
+  ggplot(marketing, aes(Seniority)) +
+  geom_boxplot() +
+  theme_minimal()
+box5 <- 
+  ggplot(marketing, aes(Age)) +
+  geom_boxplot() +
+  theme_minimal()
+
+Rmisc::multiplot(box1, box2, box3, box4, box5, cols = 2)
+```
+
+Si observamos estos gráficos de cajas y bigotes, todas nuestras variables **cuantitativas continuas** son **asimétricas** (excepto `Recency` y `Seniority`), por lo que se detectarán los outliers y se imputarán los ausentes por la **mediana** (en este caso, la medida estadística más representativa del total de los registros de la variable).
+Para el caso de `Recency` y `Seniority`, al presentar distribuciones **muy simétricas**, se optará por detectarlos en función de la **media**.
+Para el resto de variables **cualitativas**, **imputaremos los ausentes** directamente por la **moda**.
+
+```{r}
+marketing$Income[is.na(marketing$Income)] <- median(marketing$Income,na.rm = TRUE)
+
+marketing <-
+  marketing |> 
+  dplyr::mutate(across(c(Income, TotSpent, Age), function(x) { ifelse(abs(scores(x, type = "mad")) > 3 & !is.na(x), NA, x) })) |> 
+  dplyr::mutate(across(c(Recency, Seniority), function(x) { ifelse(abs(scores(x, type = "z")) > 2.5 & !is.na(x), NA, x) }))
+```
+
+## Imputación de los datos ausentes
+
+Una vez **detectados los outliers** y **transformados a NA**, le imputaremos a cada variable el valor que le corresponda **(media, mediana o moda)**.
+
+```{r}
+marketing$Income[is.na(marketing$Income)] <- median(marketing$Income,na.rm = TRUE)
+marketing$TotSpent[is.na(marketing$TotSpent)] <- median(marketing$TotSpent,na.rm = TRUE)
+marketing$Age[is.na(marketing$Age)] <- median(marketing$Age,na.rm = TRUE)
+marketing$Recency[is.na(marketing$Recency)] <- mean(marketing$Recency,na.rm = TRUE)
+marketing$Seniority[is.na(marketing$Seniority)] <- mean(marketing$Seniority,na.rm = TRUE)
+```
+
+## Normalización de las variables
+
+Para que todas nuestras variables tengan el **mismo peso** y se puedan comparar, **normalizaremos por rango entre 0 y 1**.
+Aplicaremos `percet_rank()` para generar un **ranking porcentual** entre el total de valores por cada variable.
+
+```{r}
+marketing_rank <-
+  sapply(marketing, percent_rank) |> as.tibble()
+```
+
+# Fase 3: Aplicación de técnicas de reducción de dimensiones
+
+## Análisis de Componentes Principales (ACP)
+
+Cuando se recoge la información de una muestra de datos, lo más frecuente es tomar el **mayor número posible de variables**.
+Sin embargo, si tomamos **demasiadas** variables **es difícil visualizar relaciones entre ellas**.
+Otro problema que se presenta es la **fuerte correlación que muchas veces se presenta entre las variables**: si tomamos demasiadas variables (cosa que en general sucede cuando no se sabe demasiado sobre los datos o sólo se tiene ánimo exploratorio), lo normal es que estén **relacionadas o que midan lo mismo bajo distintos puntos de vista**.
+
+Para estudiar las **relaciones** que se presentan entre $p$ variables correlacionadas, se puede transformar el conjunto original de variables en otro que **no tenga repetición o redundancia en la información** llamado **conjunto de Componentes Principales**.
+Las nuevas variables son combinaciones lineales de las anteriores y se van construyendo según el orden de importancia en cuanto a la variabilidad total que recogen de la muestra.
+
+El objetivo de este análisis es ver si las **primeras Componentes Principales recogen la mayor parte de la variación de los datos originales**.
+Si esto es así, dichas Componentes se pueden utilizar para **resumir** los datos con la mínima pérdida de información.
+Esto dará lugar a **importantes simplificaciones** en los análisis y **algoritmos** posteriores una vez determinadas las variables más relevantes que puedan clasificar a los clientes en grupos.
+
+Lanzamos el ACP con `prcomp` del paquete `{stats}`.
+
+```{r}
+# Lanzamos el ACP
+ACP <- 
+  prcomp(marketing_rank)
+
+# Guardamos el valor de las componentes para cada observación
+componentes <- 
+  ACP$x |> as_tibble()
+
+# Resumen de los autovalores para cada componente
+summary(ACP)
+```
+
+Si observamos los resultados, los tres primeros componentes principales explican el **77.49 % de la variación en los datos**.
+Si seguimos el **criterio de la varianza explicada (\> 70 %)**, podríamos seleccionar estos tres primeros factores (amén de poder representarlos en un plano 3D).
+Además, a partir del quinto factor, la proporción de varianza explicada que aporta cada nuevo componente disminuye progresivamente.
+Visualicemos esta cuestión con la representación de un par de **diagramas de sedimentación** a través del método de Elbow:
+
+```{r}
+b1 <- fviz_eig(ACP, choice = "variance", geom = "line", 
+         main = "Diagrama de varianza explicada", ylab = "Porcentaje de varianza explicada",
+         xlab = "Componentes", ggtheme = theme_minimal())
+
+b2 <- fviz_eig(ACP, choice = "variance", geom = "line", 
+         main = "Diagrama de sedimentación", ylab = "Porcentaje de varianza explicada",
+         xlab = "Componentes", ggtheme = theme_minimal())
+
+Rmisc::multiplot(b1, b2, cols =2)
+```
+
+La **gráfica de sedimentación** muestra cómo los valores propios conforman el ángulo más cerrado **después del tercer o cuarto componente principal**.
+Como queremos cumplir el **método de la varianza explicada**, retendremos finalmente los tres primeros factores, explicando con ellos el **77.49 % % de la variabilidad total de nuestros datos**.
+
+Para hacernos una idea de cómo se han reducido las dimensiones de los datos originales, vamos a visualizar en un **gráfico en tres dimensiones** cómo se distribuyen los datos en función de los **tres primeros Componentes Principales**:
+
+```{r}
+# Creamos la trama para la representación gráfica
+trace <- 
+  plot_ly(componentes, x = ~PC1, y = ~PC2, z = ~PC3, 
+          type = 'scatter3d', mode = 'markers', 
+          marker = list(color = 'blue', size = 8, 
+                        line = list(color = 'black', width = 1)))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Componente 1'), 
+                    yaxis = list(title = 'Componente 2'), 
+                    zaxis = list(title = 'Componente 3')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Como se puede observar no existe todavía segmentación alguna sobre nuestros datos, aunque sí se puede apreciar cómo **determinados valores se encuentran más cercanos (representados) por determinados Componentes**.
+A continuación, comprobaremos **qué grupos de variables quedan mejor representados por cada Componente**.
+
+### Representatividad de cada variable en cada Componente Principal
+
+```{r}
+# Añadimos los componentes seleccionados a nuestro dataset de variables estandarizadas
+marketing_rank_cp <- 
+  marketing_rank |> 
+  mutate(PC1= componentes$PC1 , PC2 = componentes$PC2, 
+         PC3 =componentes$PC3, PC4=componentes$PC4)
+
+# Creamos una tabla con las correlaciones de cada variable para cada Componente
+marketing_rank_cp <- 
+  cor(marketing_rank_cp) |> as_tibble() |> tail(4) |> select(-c(PC1, PC2, PC3, PC4)) |> 
+  cbind(Componentes = c("Componente 1", "Componente 2", "Componente 3", "Componente 4")) |> 
+  select(Componentes, everything())
+marketing_rank_cp
+```
+
+Desde esta tabla ya podemos observar ciertas **correlaciones entre variables y Componentes**.
+Por ejemplo, el **Componente 1** parece mantener mayores correlaciones con las **variables relacionadas con el dinero en general**: el **gasto total**, el **nivel económico del individuo**, o sus **gastos individuales** en cada uno de los sectores de la compañía (Fish, Meat, etc.).
+Para comprender de una manera más gráfica estas relaciones, visualicemos estas correlaciones **enfrentando** cada uno de los Componentes.
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .6}
+b1 <-
+  fviz_pca_var(ACP, axes = c(1, 2), col.var="steelblue", select.var = list(contrib = 17), ) + 
+  theme_minimal() +
+  ggtitle("ACP de los componentes 1 y 2")
+
+b2 <-
+  fviz_pca_var(ACP, axes = c(3, 4), col.var="steelblue", select.var = list(contrib = 10), ) +
+  theme_minimal() +
+  ggtitle("ACP de los componentes 3 y 4")
+
+Rmisc::multiplot(b1, b2, cols = 2)
+```
+
+En este diagrama se pueden observar perfectamente los grupos de variables que son representados por los distintos Componentes:
+
+-   El **Componente 1** representa ante todo variables relacionadas con el **gasto** (`TotSpent`, `Meat`, `Income`, etc.), con el **número de compras** (`NumWebPurchases`, `NumStorePurchases`, etc.) y con el **nivel económico** del individuo (`Income`). En este sentido, podríamos decir que este Componente explica, ante todo, **cuestiones de índole económica**.
+-   El **Componente 2** representa ante todo variables relacionadas con la **familia del individuo**. Encontramos que mantiene correlaciones negativas con variables como `Teenhome`, `Children` o `Family_Size` . También mantiene una correlación muy fuerte con la variable `NumDealsPurchases`, que medía el número de compras con descuento (quizá cuanto mayor sea la familia en número, mayores serán los productos con descuento que traten de comprar).
+-   El **Componente 3** mantiene correlaciones muy fuertes con dos de nuestras variables principales: `Age` y `Seniority`. Estas dos variables también están muy correlaciones entre sí como ya se mostró en la fase del análisis exploratorio, quizá por ello se muestren juntas en este Componente. También mantiene correlaciones con `NumWebVisitsMonth` y `Teenhome`.
+-   El **Componente 4** es el que **menos varianza explica** del total de los datos. Mantiene correlaciones bastante bajas con variables ya explicadas por otros Componentes, por lo que quizá sea incluso necesario **eliminarla**
+
+Las variables `Education` y `Marital_Status` están repartidas entre distintos Componentes con coeficientes de correlación inferiores a 0.5 (la primera entre los Componentes 2 y 3; la segunda entre los Componentes 3 y 4).
+
+# Fase 4: Análisis clúster
+
+Una vez **reducida la dimensión** de nuestros datos y revisado el **significado de cada Componente**, a continuación procederemos con el **análisis clúster**.
+Lanzaremos diferentes **algoritmos** a través de **métodos jerárquicos** y **no jerárquicos** de clasificación a fin de comprobar qué segmentación es más adecuada de cara al posterior **análisis de asociaciones**.
+
+En primer lugar, lanzaremos un **K-Medias** sobre los tres primeros Componentes que obtuvimos del ACP.
+
+## Métodos de agrupamiento sobre los Componentes Principales: algoritmo K-Medias
+
+Antes de nada, calcularemos el **número óptimo de clústeres a través del método de Elbow**.
+Para ello, compararemos los posibles clústeres con el WCSS (Within Cluster Sum of Squares), que calcula la **varianza de los puntos de datos dentro de cada clúster**.
+En esencia, el WCSS es la **suma de las distancias al cuadrado** entre cada punto de datos y el **centroide del clúster al que pertenece**.
+Un valor **bajo** de WCSS indica que los puntos de datos están **muy cerca del centroide del clúster**, mientras que un valor **alto** indica que los puntos están **dispersos y lejos del centroide**.
+En este sentido, interesa **minimizar** su valor sin incrementar en exceso el número de clústeres, pues iríamos perdiendo poco a poco la capacidad de agrupar información.
+
+A continuación se muestra el **diagrama de sedimentación** para el método de Elbow:
+
+```{r}
+# Método de Elbow
+componentes |> fviz_nbclust(kmeans, method = "wss")
+
+# Método de Silhouette
+componentes |> fviz_nbclust(kmeans, method = "silhouette")
+```
+
+A la luz del gráfico, el **número óptimo de clústeres** podría encontrarse en torno a las **3-4 agrupaciones**, que es en donde los valores propios conforman el **ángulo más cerrado**.
+Según la puntuación de Silhouette, el número óptimo de clústeres sería de **2 agrupaciones**.
+A continuación, ejecutaremos el **algoritmo K-Medias con este número exacto de centroides** sobre nuestro dataframe con los **Componentes Principales**.
+
+```{r}
+# Ejecutamos el algoritmo K-Medias
+KMedias <- 
+  kmeans(componentes, centers = 4, nstart = 25, algorithm = "Lloyd")
+
+# Guardamos la variable que relaciona observaciones con clústeres y la unimos con nuestro dataframe original
+componentes_km <- componentes
+pred_KMedias <- KMedias$cluster
+componentes_km$clusteres_KMeans <- pred_KMedias
+marketing$clusteres_KMeans <- pred_KMedias
+```
+
+Para poder visualizar los resultados, crearemos un **gráfico en tres dimensiones** que muestre cómo se distribuyen los **datos recién agrupados** en función de los **tres primeros Componentes Principales**:
+
+```{r}
+# Creamos la trama para la representación gráfica
+trace <- 
+  plot_ly(componentes_km, x = ~PC1, y = ~PC2, z = ~PC3, 
+          type = 'scatter3d', mode = 'markers', 
+          marker = list(color = ~componentes_km$clusteres_KMeans, size = 8, 
+                        line = list(color = 'black', width = 1)))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Componente 1'), 
+                    yaxis = list(title = 'Componente 2'), 
+                    zaxis = list(title = 'Componente 3')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Como se puede observar, la **agrupación en 4 clústeres** ha resultado ser **bastante satisfactoria**.
+Con la información que disponemos acerca del significado de cada Componente, podemos **definir** cada clúster trasladándolo a algunas de las variables originales.
+En este caso, vamos a graficar el **perfil de cada clúster** basándonos en las variables `Income` y `TotSpent`:
+
+```{r}
+ggplot(data = marketing, aes(x = TotSpent, y = Income, color = as.factor(clusteres_KMeans))) +
+  geom_point() +
+  ggtitle("Perfil de cada clúster basándonos en el nivel económico y \nel nivel de gasto de cada cliente") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "bottom") +
+  theme(legend.title = element_blank()) +
+  scale_color_manual(name = "clústeres", values = c("red","#2E9FDF", "purple", "green")) + 
+  theme_minimal()
+```
+
+A pesar de que, con el algoritmo K-Medias y contemplando el total de los componentes los clústeres han quedado **bastante solapados**, podemos distinguir con facilidad **cuatro** tipos de clientes:
+
+-   El **Clúster 1** está conformado por clientes con nivel económico medio y reducido nivel de gasto.
+-   El **Clúster 2** está conformado por clientes con nivel económico alto y elevado nivel de gasto.
+-   El **Clúster 3** está conformado por clientes con nivel económico bajo y reducido nivel de gasto.
+-   El **Clúster 4** está conformado por clientes con nivel económico medio y elevado nivel de gasto.
+
+Gracias a esta primera aproximación, posteriormente emplearemos directamente las variables originales más importantes para volver a segmentar el conjunto de datos y **tratar de lograr mejores resultados**.
+Por el momento, pasaremos a aplicar otro algoritmo para la creación de **clústeres jerárquicos utilizando el método de Ward**.
+
+## Métodos de agrupamiento sobre los Componentes Principales: método de Ward para el análisis de conglomerados jerárquicos
+
+Para esta segunda agrupación, probaremos con un método jerárquico de clusterización conocido como **método de Ward** o **de la mínima varianza (Ward)**.
+Este método, más que definir la distancia entre cada dos clústeres, selecciona entre todas las uniones posibles de dos clústeres aquella unión que **minimiza la variabilidad interna de los clústeres resultantes**.
+
+En los métodos **jerárquicos** de agrupación, se suele emplear el dendrograma para la **selección del número de clústeres**.
+Este diagrama **depende de la distancia entre elementos y entre clústeres utilizada**, y nos puede ayudar a determinar en qué momento del proceso de agrupación nos deberíamos detener.
+
+```{r}
+res2 <- hcut(marketing_rank, k = 4, stand = TRUE)
+fviz_dend(res2, rect = TRUE, cex = 0.5,
+          k_colors = c("red","#2E9FDF", "yellow", "green"))
+```
+
+Para este caso concreto, se observan de nuevo claramente **4 clústeres** como en el método anterior del K-Medias.
+Ejecutamos a continuación el algoritmo con el **número exacto de centroides (k)**:
+
+```{r}
+# Ejecutamos el algoritmo según el método de Ward
+agg <- 
+  agnes(componentes, method = "ward")
+
+# Guardamos la variable que relaciona observaciones con clústeres y la unimos con nuestro dataframe original
+componentes_ward <- componentes
+pred_Ward <- cutree(agg, k = 4)
+componentes_ward$clusteres_agg <- pred_Ward
+marketing$clusteres_agg <- pred_Ward
+```
+
+Para poder visualizar los resultados, crearemos un **gráfico en tres dimensiones** que muestre cómo se distribuyen los **datos recién agrupados** en función de los **tres primeros Componentes Principales**:
+
+```{r}
+# Creamos la trama para la representación gráfica
+trace <- 
+  plot_ly(componentes_ward, x = ~PC1, y = ~PC2, z = ~PC3, 
+          type = 'scatter3d', mode = 'markers', 
+          marker = list(color = ~componentes_ward$clusteres_agg, size = 8, 
+                        line = list(color = 'black', width = 1)))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Componente 1'), 
+                    yaxis = list(title = 'Componente 2'), 
+                    zaxis = list(title = 'Componente 3')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Como se puede observar, el **resultado es similar** a lo que nos ofrecía el algoritmo K-Medias.
+
+```{r}
+ggplot(data = marketing, aes(x = TotSpent, y = Income, color = as.factor(clusteres_agg))) +
+  geom_point() +
+  ggtitle("Perfil de cada clúster basándonos en el nivel económico y \nel nivel de gasto de cada cliente") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "bottom") +
+  theme(legend.title = element_blank()) +
+  scale_color_manual(name = "clústeres", values = c("red","#2E9FDF", "purple", "green")) + 
+  theme_minimal()
+```
+
+Los resultados de los **cuatro clústeres** para las variables `TotSpent` e `Income` parecen ser también **muy similares**, recordemos:
+
+-   El **Clúster 1** está conformado por clientes con nivel económico medio y elevado nivel de gasto.
+-   El **Clúster 2** está conformado por clientes con nivel económico medio y reducido nivel de gasto.
+-   El **Clúster 3** está conformado por clientes con nivel económico alto y elevado nivel de gasto.
+-   El **Clúster 4** está conformado por clientes con nivel económico bajo y reducido nivel de gasto.
+
+Para **no repetir** el mismo análisis que con el K-Medias y continuar directamente con el siguiente algoritmo, **comprobaremos cómo se comportan algunas de las demás variables del dataset en los distintos clústeres** por medio de la representación de **gráficos de cajas y bigotes**:
+
+```{r}
+ggplot(data = marketing, aes(x = Is_Parent, y = TotSpent, color = as.factor(clusteres_KMeans))) +
+  geom_boxplot(outlier.shape = 16) +
+  ggtitle("Perfil de cada clúster basándonos en si el cliente es \npadre/madre de familia") +
+  geom_jitter(width = 0.1) +
+  facet_wrap(~clusteres_KMeans, ncol = 2, scales = "free") +
+  scale_color_viridis(name = "clústeres", discrete = TRUE, option = "D")  +
+  scale_x_discrete(limits=c(0,1)) +
+  theme_minimal() 
+```
+
+En este gráfico de cajas y bigotes, podemos apreciar la relación entre el gasto total del cliente en la empresa y su situación familiar.
+En este caso, **si el cliente tiene hijos o no los tiene**.
+Cada diagrama se corresponde con **uno de los cuatro clústeres** que detectamos a través del **método de Ward**.
+Se observan diferencias bastante significativas entre clústeres:
+
+-   El **Clúster 1**, en su mayoría, estaría conformado por clientes con hijos y con un nivel de gasto muy reducido.
+-   El **Clúster 2**, en su mayoría, estaría conformado por clientes sin hijos y con un nivel de gasto elevado. Podríamos decir que son clientes con un nivel de vida bastante elevada, que consumen productos con un valor superior a la mediana, y en sectores de productos para adultos.
+-   El **Clúster 3**, en su mayoría, estaría conformado por clientes con o sin hijos y con un nivel de gasto medio.
+-   El **Clúster 4**, en su mayoría, estaría conformado por clientes con hijos y con un nivel de gasto elevado.
+
+```{r}
+ggplot(data = marketing, aes(x = Children, y = TotSpent, color = as.factor(clusteres_KMeans))) +
+  geom_boxplot(outlier.shape = 16) +
+  ggtitle("Perfil de cada clúster basándonos en el número de hijos del cliente") +
+  geom_jitter(width = 0.1) +
+  facet_wrap(~clusteres_KMeans, ncol = 2, scales = "free") +
+  scale_color_viridis(name = "clústeres", discrete = TRUE, option = "D")  +
+  theme_minimal() 
+```
+
+En este gráfico de cajas y bigotes, podemos apreciar la relación entre el gasto total del cliente en la empresa y su situación familiar.
+En este caso, **el número de hijos del cliente**.
+Cada diagrama se corresponde con **uno de los cuatro clústeres** que detectamos a través del **método de Ward**.
+Se observan diferencias bastante significativas entre clústeres:
+
+-   El **Clúster 1**, en su mayoría, estaría conformado por clientes con dos hijos y con un nivel de gasto muy reducido.
+-   El **Clúster 2**, en su mayoría, estaría conformado por clientes sin hijos y con un nivel de gasto elevado.
+-   El **Clúster 3**, en su mayoría, estaría conformado por clientes con o sin hijos y con un nivel de gasto medio.
+-   El **Clúster 4**, en su mayoría, estaría conformado por clientes con uno o dos hijos y con un nivel de gasto elevado.
+
+```{r}
+ggplot(data = marketing, aes(x = Wines, y = Income, color = as.factor(clusteres_KMeans))) +
+  geom_point() +
+  ggtitle("Perfil de cada clúster basándonos en el nivel económico y \nel nivel de gasto en el sector vinícola") +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(legend.position = "bottom") +
+  theme(legend.title = element_blank()) +
+  scale_color_manual(name = "clústeres", values = c("green","yellow", "red", "purple")) + 
+  theme_minimal()
+```
+
+En este gráfico de cajas y bigotes, podemos apreciar la relación entre el nivel económico del cliente y su nivel de gasto en el sector `Wines`.
+Cada diagrama se corresponde con **uno de los cuatro clústeres** que detectamos a través del **método de Ward**.
+Se observan diferencias bastante significativas entre clústeres:
+
+-   El **Clúster 1**, en su mayoría, estaría conformado por clientes con un nivel de gasto muy reducido en vinos y un nivel económico medio.
+-   El **Clúster 2**, en su mayoría, estaría conformado por clientes con un nivel de gasto elevado en vinos y un nivel económico también elevado.
+-   El **Clúster 3**, en su mayoría, estaría conformado por clientes con un nivel de gasto muy reducido en vinos y un nivel económico también bastante reducido.
+-   El **Clúster 4**, en su mayoría, estaría conformado por clientes con un nivel de gasto elevado en vinos y un nivel económico medio.
+
+Los clústeres 1 y 3 están bastante mezclados, probablemente por su **igualado nivel de gasto en el sector vinícola**.
+Además, por ejemplo, si comparamos todos los gráficos, nos percataremos de que el **cliente prototípico de vinos** es un cliente con un **nivel económico medio-alto**, **sin hijos** y **con un nivel educativo elevado**.
+En los siguientes apartados analizaremos más relaciones entre variables desde distintas perspectivas.
+
+## Métodos de agrupamiento sobre las variables originales: modelo Recency, Frequency, Monetary (RFM)
+
+Para esta **tercera agrupación**, probaremos a identificar las clases de clientes en función del **modelo RFM**.
+El modelo RFM **(Recency, Frequency, Monetary)** es un modelo de análisis de clientes que se utiliza para identificar a los clientes más valiosos de un negocio.
+El modelo clasifica a los clientes según tres categorías: **recencia, frecuencia y valor monetario**.
+La **recencia** recoge información acerca de **cuándo fue la última vez que un cliente realizó una compra**, la **frecuencia** refiere a **cuántas compras ha realizado el cliente en un período de tiempo determinado**, y el **valor monetario** refiere a la **cantidad de dinero que ha gastado en total**.
+A través de esta clasificación, los negocios son capaces de identificar a sus mejores clientes y desarrollar estrategias para retenerlos o atraerlos.
+
+```{r}
+# Definimos en un nuevo dataframe nuestras tres variables de referencia
+marketing_rfm <-
+  marketing |> 
+  mutate(NumPurchases = NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases) |> 
+  select(Recency, Frequency = NumPurchases, Monetary = TotSpent)
+
+# Normalizamos los datos
+marketing_rank_rfm <- 
+  sapply(marketing_rfm, percent_rank) |> as.tibble()
+```
+
+Una vez tenemos nuestro nuevo dataframe con las variables **RFM normalizadas**, definimos el **número de clústeres** por medio de la **creación del dendrograma**:
+
+```{r}
+res2 <- hcut(marketing_rank_rfm, k = 4, stand = TRUE)
+fviz_dend(res2, rect = TRUE, cex = 0.5,
+          k_colors = c("red","#2E9FDF", "yellow", "green"))
+```
+
+Se observan claramente **4 clústeres**.
+
+```{r}
+# Ejecutamos el algoritmo según el método de Ward
+agg <- agnes(marketing_rank_rfm, method = "ward")
+
+# Guardamos la variable que relaciona observaciones con clústeres y la unimos con nuestro dataframe original
+pred_Ward <- cutree(agg, k = 4)
+marketing_rank_rfm$clusteres_agg_rfm <- pred_Ward
+marketing_rfm$clusteres_agg_rfm <- pred_Ward
+```
+
+Para poder visualizar los resultados, crearemos un **gráfico en tres dimensiones** que muestre cómo se distribuyen los **datos recién agrupados** en función de nuestras **tres variables (Recency, Monetary y Frequency)**:
+
+```{r}
+# Creamos la trama para la representación gráfica
+trace <- plot_ly(marketing_rank_rfm, x = ~Recency, y = ~Frequency, z = ~Monetary, 
+                 type = 'scatter3d', mode = 'markers', 
+                 marker = list(size = 5, line = list(color = 'black', width = 1),
+                 color = as.factor(marketing_rank_rfm$clusteres_agg_rfm), colors = c("red","#2E9FDF", "yellow", "green")))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Recency'), 
+                    yaxis = list(title = 'Frequency'), 
+                    zaxis = list(title = 'Monetary')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Como se puede observar, **podemos visualizar 4 clústeres muy bien definidos**:
+
+-   El **Clúster 1 (naranja)** está compuesto por clientes con grandes volúmenes de compra, con una elevada cantidad de gasto, pero con una disminuida recencia **(High potential)**.
+-   El **Clúster 2 (blanco)** está compuesto por clientes con grandes volúmenes de compra, con una elevada cantidad de gasto y con una elevada recencia **(Stars)**.
+-   El **Clúster 3 (amarillo)** está compuesto por clientes con pequeños volúmenes de compra, con una pequeña cantidad de gasto y con una disminuida recencia **(Leaky bucket)**.
+-   El **Clúster 4 (rojo)** está compuesto por clientes con pequeños-medios volúmenes de compra, con una pequeña-media cantidad de gasto y con una elevada recencia **(Need attention)**.
+
+Además, a través de la función `rfm_scores` del paquete `{rfm}` podemos asignar a cada cliente una puntuación en términos de RFM:
+
+```{r}
+# Definimos algunos parámetros y variables para la creación de la tabla
+marketing_rfm <- marketing_rfm |> rowid_to_column("ID")
+analysis_date <- today()
+
+# Asignamos a cada observación una puntuación en términos de RFM
+rfm_scores <- 
+  rfm_table_customer(marketing_rfm, customer_id = ID, 
+                     n_transactions = Frequency, recency_days = Recency, 
+                     total_revenue = Monetary, analysis_date =  analysis_date)
+rfm_scores
+```
+
+Como se puede observar en la tabla, este paquete clasifica a cada cliente con una **puntuación del 1 al 5** para cada variable **(Recency, Frequency y Monetary)**.
+El **score** para cada cliente viene determinado por la **unión de esos tres dígitos**.
+Podemos incluso graficar de varias formas estos parámetros:
+
+```{r}
+rfm_heatmap(rfm_scores)
+```
+
+A modo de ejemplo, hemos representado nuestras **tres variables** en forma de **mapa de calor**.
+Como se puede observar, los **valores altos** para la variable **Monetary** (nivel económico del cliente) se dan únicamente en clientes con **puntuaciones altas** para la variable **Frequency** (número total de compras por cliente), **a partir del 3**.
+La variable **Recency** (recencia del cliente) **no es tan significativa** porque encontramos clientes con **bajos y altos niveles de recencia para todas las tipologías** (alto o bajo nivel económico, alta o baja frecuencia de compra, etc.).
+
+Las puntuaciones (**scores**) que nos ha ofrecido el **modelo RFM** para nuestra malla de clientes nos servirán en posteriores apartados para **identificarlos** y **diseñar estrategias personalizadas por grupos de clientes a fin de recuperarlos, mantenerlos o incentivarlos**.
+Para finalizar, en el siguiente apartado de este epígrafe se desarrolla el último modelo de agrupación aplicado a nuestras tres variables originales de referencia: `Income`, `TotSpent` y `Seniority`.
+
+## Métodos de agrupamiento sobre las variables originales: variante del modelo RFM con Income, TotSpent y Seniority
+
+Por último, aplicaremos la **misma metodología** que en el apartado anterior a las tres variables de referencia que habíamos identificado al comienzo de la práctica: las variables `Income`, `TotSpent` y `Seniority`.
+De esta manera, podremos **agrupar a los clientes en función de otras características distintas** a fin de poder definir **estrategias también diferentes**.
+
+```{r}
+set.seed(1223)
+
+# Definimos en un nuevo dataframe nuestras tres variables de referencia
+marketing_gmm <-
+  marketing |> 
+  select(Income, Seniority, Spending = TotSpent)
+
+# Normalizamos los datos
+marketing_rank_gmm <- 
+  sapply(marketing_gmm, percent_rank) |> as.tibble()
+```
+
+Una vez tenemos nuestro nuevo dataframe con las variables `Income`, `TotSpent` y `Seniority`, definimos el **número de clústeres** por medio de la **creación del dendrograma**:
+
+```{r}
+res2 <- hcut(marketing_rank_gmm, k = 4, stand = TRUE)
+fviz_dend(res2, rect = TRUE, cex = 0.5,
+          k_colors = c("red","#2E9FDF", "yellow", "green"))
+```
+
+De nuevo, para estas tres variables se observan claramente **4 clústeres**.
+
+```{r echo=FALSE}
+KMedias <- 
+  kmeans(marketing_rank_gmm, centers = 4, nstart = 25, algorithm = "Lloyd")
+pred_KMedias <- KMedias$cluster
+marketing_rank_gmm$clusteres_KMeans <- pred_KMedias
+marketing_gmm$clusteres_KMeans <- pred_KMedias
+```
+
+```{r}
+# Ejecutamos el algoritmo según el método de Ward
+agg <- agnes(marketing_rank_gmm, method = "ward")
+
+# Guardamos la variable que relaciona observaciones con clústeres y la unimos con nuestro dataframe original
+pred_Ward <- cutree(agg, k = 4)
+marketing_rank_gmm$clusteres_agg_gmm <- pred_Ward
+marketing_gmm$clusteres_agg_gmm <- pred_Ward
+```
+
+Para poder visualizar los resultados, crearemos un **gráfico en tres dimensiones** que muestre cómo se distribuyen los **datos recién agrupados** en función de nuestras **tres variables (Income, TotSpent y Seniority)**:
+
+```{r}
+# Creamos la trama para la representación gráfica
+trace <- plot_ly(marketing_gmm, x = ~Income, y = ~Seniority, z = ~Spending, 
+                 type = 'scatter3d', mode = 'markers', 
+                 marker = list(size = 5, line = list(color = 'black', width = 1),
+                 color = as.factor(marketing_gmm$clusteres_agg_gmm), colors = c("red","#2E9FDF", "yellow", "green")))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Income'), 
+                    yaxis = list(title = 'Seniority'), 
+                    zaxis = list(title = 'Spending')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Como se puede observar, **podemos visualizar 4 clústeres aún mejor definidos si cabe que en el modelo RFM**:
+
+-   El **Clúster 1 (naranja)** está compuesto por clientes con un nivel económico elevado, con una elevada cantidad de gasto y con gran antigüedad como clientes **(Stars)**.
+-   El **Clúster 2 (blanco)** está compuesto por clientes con un nivel económico elevado, con una elevada cantidad de gasto, pero con menor antigüedad como clientes **(High potential)**.
+-   El **Clúster 3 (amarillo)** está compuesto por clientes con un nivel económico bajo, con una pequeña cantidad de gasto, pero con mayor antigüedad como clientes **(Need attention)**.
+-   El **Clúster 4 (rojo)** está compuesto por clientes con un nivel económico bajo, con una pequeña cantidad de gasto y con baja antigüedad como clientes **(Leaky bucket)**.
+
+# Fase 5: Respuesta a las cuestiones planteadas
+
+En esta última sección, responderemos a las preguntas planteadas en el enunciado del ejercicio.
+Además, **uniremos todo lo analizado** en estas últimas secciones en las que agrupamos a los clientes en función de diversas variables para aportar **nuestras propias recomendaciones a la empresa**.
+
+## Tarea 1: Análisis exploratorio de los datos
+
+### ¿Hay valores nulos o valores atípicos? ¿Cómo los manejarás?
+
+#### Valores ausentes
+
+```{r}
+ausentes <- 
+  apply(marketing_bruto, 2, function(x) sum(is.na(x)))
+
+ausentes_tb <- 
+  tibble(Variable = names(marketing_bruto), Ausentes = ausentes) |> 
+  filter(Ausentes > 0)
+ausentes_tb
+```
+
+El dataset presenta 24 valores nulos para la variable `Income`.
+En el transcurso de la práctica, estos valores se imputaron teniendo en cuenta la medida más representativa para la distribución de la variable.
+A continuación se vuelve a ilustrar el proceso:
+
+```{r}
+ggplot(marketing_bruto, aes(Income)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+Como se puede observar en el diagrama, para evitar el efecto de los valores outliers, se decidieron imputar estos valores ausentes por la **mediana**.
+Al presentar la variable `Income` una distribución bastante **asimétrica**, la **media** siempre se va a ver **influenciada por posibles valores extremos**, por lo que la **mediana** será en este caso **la medida más representativa**.
+
+#### Valores outliers
+
+```{r}
+ggplot(marketing_bruto, aes(Year_Birth)) +
+  geom_boxplot() +
+  theme_minimal()
+```
+
+En la fase de muestreo y modificación de las variables ya se trataron todos los valores outliers.
+A modo de ejemplo, lo que se hizo con la variable `Year_Birth` (o, posteriormente, `Age`) fue detectar en función de la mediana los **tres outliers que se aprecian en el diagrama**, y se sustituyeron por un **valor ausente** para posteriormente imputarles la medida más representativa (en este caso, la mediana).
+
+Así se hizo para el total de **variables cuantitativas continuas**: para el caso de `Recency` y `Seniority`, al presentar distribuciones **muy simétricas**, se optó por detectar los outliers en función de la **media**.
+Para el **resto** de variables cuantitativas se hizo en función de la **media**.
+
+### ¿Hay alguna variable que justifique transformaciones?
+
+En la primera fase, en la sección de **problemas de codificación**, se optó por transformar algunas de las variables semicualitativas (véase `AcceptedCmp1`, `AcceptedCmp2`, `AcceptedCmp3`, `AcceptedCmp4`, `AcceptedCmp5`, `Response`) en **factores**, para mayor facilidad en su manipulación y representación.
+Además, la variable `Education` se transformó en **factor ordinal**, ya que sus categorías seguían una **jerarquía ordinal**.
+
+Por otro lado, la variable `Dt_Customer` se transformó a **tipo fecha** para la **creación de posteriores variables**.
+
+### ¿Hay alguna variable útil que se pueda crear con los datos dados?
+
+A lo largo del documento **se han creado una gran cantidad de variables**.
+A continuación se replica el código para su creación:
+
+```{r, eval = FALSE}
+# Total de gasto por cliente
+marketing <- 
+  marketing |> 
+  mutate(TotSpent = MntFishProducts + MntMeatProducts + MntFruits + 
+           MntSweetProducts + MntWines + MntGoldProds)
+
+# Total de compras por cliente
+marketing <- 
+  marketing |> 
+  mutate(TotPurchases = NumCatalogPurchases + NumStorePurchases + 
+           NumWebPurchases + NumDealsPurchases)
+         
+# Edad del cliente
+marketing <-
+  marketing |> 
+  mutate(Age = 2023 - Year_Birth) 
+
+# Antigüedad de cliente
+marketing <- 
+  marketing |> 
+  mutate(Seniority = 
+           interval(ymd(20120730), ymd(marketing_bruto$Dt_Customer)) / months(1))
+
+# Estado civil del cliente
+marketing <-
+  marketing |> 
+  mutate(Marital_Status = 
+           if_else(Marital_Status == "Married" | 
+                  Marital_Status == "Together", 1, 0))
+
+# Nivel académico del cliente
+marketing <-
+  marketing |> 
+  mutate(Education = 
+           if_else(Education == "Basic" | 
+                   Education == "2n Cycle", 0, 1))
+
+# Número de niños en la familia
+marketing <-
+  marketing |> 
+  mutate(Children = Kidhome + Teenhome)
+
+# Número de individuos en la familia
+marketing <-
+  marketing |> 
+  mutate(Family_Size = if_else(Marital_Status == 0, 1, 2) + Children)
+
+# ¿El cliente es padre o madre de familia?
+marketing <- 
+  marketing |> 
+  mutate(Is_Parent = if_else(Children > 0, 1, 0))
+```
+
+En total se crearon o se recategorizaron **nueve** variables: `TotSpent`, `TotPurchases`, `Age`, `Seniority`, `Marital_Status`, `Education`, `Children`, `Family_Size` e `Is_Parent`.
+
+### ¿Notas algún patrón o anomalía en los datos? ¿Puedes graficarlos?
+
+#### Patrones
+
+La forma más habitual para detectar posibles patrones o relaciones entre variables es realizar un **test de colinealidad entre las variables** para distinguir así **las que están más relacionadas entre sí** (relacionadas **linealmente**, claro).
+La **matriz de correlaciones** adquiere la siguiente forma:
+
+```{r}
+library(corrr)
+
+marketing$AcceptedCmp1 <- 
+  marketing_bruto$AcceptedCmp1
+marketing$AcceptedCmp2 <- 
+  marketing_bruto$AcceptedCmp2
+marketing$AcceptedCmp3 <- 
+  marketing_bruto$AcceptedCmp3
+marketing$AcceptedCmp4 <- 
+  marketing_bruto$AcceptedCmp4
+marketing$AcceptedCmp5 <- 
+  marketing_bruto$AcceptedCmp5
+marketing$Response <- 
+  marketing_bruto$Response
+
+cor_matrix <- 
+  marketing |> select(where(is.numeric)) |> select(-c(clusteres_agg, clusteres_KMeans)) |> cor(use = "pairwise.complete.obs", method = "pearson")
+```
+
+```{r layout="l-body-outset", fig.width=13, fig.asp = .9}
+library(corrplot)
+cor_matrix |>
+  corrplot(method = "shade", tl.cex = 0.55, number.cex = 0.7, type = "full")
+```
+
+Algunos de los **patrones más evidentes** que se pueden observar entre variables por medio de esta **matriz** son los siguientes:
+
+-   La variable `Income` está muy correlacionada con las variables que miden el **número de compras en los diferentes sectores de la compañía** (`Wines`, `Sweets`, etc.) y con el **nivel total de gasto** (`TotSpent`).
+    Además, se trata de una correlación **positiva**: **a mayor nivel económico, mayor es el nivel de compra**.
+    Por otro lado, la variable `Income` también está muy correlacionada con las variables que miden el **número de compras en los diferentes establecimientos** (`NumCatalogPurchases`, `NumStorePurchases`, etc.).
+    Se tratan de correlaciones **positivas**, excepto para aquella que mide el **número de veces que se ha visitado la web en el último mes** (`NumWebVisitsMonth`).
+    Esto podría ser debido a que las personas con un nivel económico más bajo visiten más la web a fin de encontrar **productos en oferta constantemente**.
+    Los clientes con niveles económicos más elevados no tendrían ese problema, por lo que solo acudirían a la web cuando necesitaran algún producto en concreto.
+
+-   Las variables relacionadas con los resultados de las campañas de marketing (`AcceptedCmp1`, `AcceptedCmp2`, etc.) están **muy correlacionadas positivamente entre ellas** (como era de esperar).
+    Además, encuentran correlaciones negativas con los grupos de variables relacionadas con la familia del cliente (`Children`, `Family_Size`, etc.).
+
+-   Las variables `Children`, `Family_Size` e `Is_Parent` están muy correlacionadas con las variables que miden el **número de compras en los diferentes sectores de la compañía** (`Wines`, `Sweets`, etc.) y con el **nivel total de gasto** (`TotSpent`), pero, al contrario que con `Income`, **de manera negativa**.
+    Curiosamente, la única variable de este tipo que correlaciona positivamente con `Children` es `NumDealsPurchases`.
+    Esto implica principalmente que **las familias con niños y/o adolescentes** presentan un **nivel económico más bajo** y, por ende, tratan de esperar a **posibles ofertas** antes que comprar directamente los productos a su precio habitual.
+
+Tal y como se indica en el enunciado, vamos a plotear estás relaciones:
+
+```{r}
+marketing |> 
+  drop_na(Income) |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Income, y = Wines)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Correlación positiva entre el nivel económico de un cliente y su gasto en productos vinícolas.
+
+```{r}
+marketing |> 
+  drop_na(Income) |> 
+  filter(Income < 150000) |> 
+  ggplot(aes(x = Income, y = NumCatalogPurchases)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Correlación positiva entre el nivel económico de un cliente y su número de compras por catálogo.
+
+```{r}
+marketing |> 
+  ggplot(aes(x = factor(Children), y = Income)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Children") + 
+  theme_minimal()
+```
+
+Correlación negativa entre el nivel económico de un cliente y el número de hijos.
+
+```{r}
+marketing |> 
+  ggplot(aes(x = factor(Children), y = NumDealsPurchases)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Children") + 
+  theme_minimal()
+```
+
+Correlación positiva entre el número de compras realizadas con descuento y el número de hijos.
+
+#### Anomalías
+
+Algunas de las **incongruencias** que hemos podido avistar respecto de la matriz de correlaciones son las siguientes:
+
+-   Las variables `Children`, `Family_Size` e `Is_Parent` están **inversamente correlacionadas** con la variable `Sweets`.
+    Por lo general, es de esperar que si una familia tiene niños, su consumo de dulces sea **superior** al resto de clientes.
+
+-   La variable `NumWebVisitsMonth` está **incorrelada** con la variable `NumWebPurchases`, y mantiene una **correlación negativa** con `TotSpent`.
+    Era de esperar que a más visitas a la web, más compras se produzcan, pero esta relación no se produce.
+    Además, `NumWebVisitsMonth` está **correlacionada de manera positiva** con la variable `NumDealsPurchases`, lo que puede implicar que, o bien las ofertas solo se lanzan a través de la web de la compañía, o bien las ofertas estimulan de algún modo el acceso de los clientes a la página web.
+
+Tal y como se indica en el enunciado, vamos a plotear estás anomalías:
+
+```{r}
+marketing |> 
+  ggplot(aes(x = factor(Children), y = Sweets)) +
+  geom_boxplot(col = "#EB9891") + labs(x = "Children") + 
+  theme_minimal()
+```
+
+Correlación negativa entre la cantidad gastada en productos dulces y el número de hijos.
+
+```{r}
+marketing |> 
+  ggplot(aes(x = NumWebVisitsMonth, y = NumWebPurchases)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Incorrelación entre el número de compras realizadas a través del sitio web y el número de compras realizadas con descuento.
+
+```{r}
+marketing |> 
+  ggplot(aes(x = NumWebVisitsMonth, y = NumDealsPurchases)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Correlación positiva entre el número de compras realizadas a través del sitio web y el número de hijos.
+
+## Tarea 2: Análisis estadístico
+
+### ¿Qué factores están significativamente relacionados con el número de compras en la tienda?
+
+Para ver cuáles son las variables más relevantes con el número de compras en la tienda podemos utilizar el análisis de componentes principales que hemos realizado previamente.
+
+```{r}
+# Añadimos los componentes seleccionados a nuestro dataset de variables estandarizadas
+  marketing_rank |> 
+  mutate(PC1= componentes$PC1 , PC2 = componentes$PC2, 
+         PC3 =componentes$PC3, PC4=componentes$PC4) |> cor()
+```
+
+Para saber los factores más relevantes a la variable "NumStorePurchases" nos fijaremos solo en su columna.
+Observamos que tiene alta correlación con la componente 1, donde el componente 1 representa a todas aquellas variables que están relacionadas con el nivel económico del cliente(gastos, ingresos, compras, etc.).
+
+Entonces como "NumStorePurchases" pertenece también también a la componente 1 podemos decir que esos factores serían los más relevantes para "NumStorePurchases".
+
+Fijándonos en la tabla de correlaciones podemos observar también aquellas variables más relevantes mediante su correlación con "NumStorePurchases".
+Entre ellas están "Income", el gasto en cada sección y el gasto total, el número de compras realizadas utilizando el catálogo y web.
+
+### ¿A Estados Unidos le va significativamente mejor que al resto del mundo en términos de compras totales?
+
+```{r}
+# Cargamos el fichero de marketing la cual contiene la columna de países
+marketing_paises  <- read_delim(file = "./marketing_data.csv", delim = ",")
+```
+
+```{r}
+# Añadimos la columna de países a nuestro fichero original
+marketing <- marketing |> mutate(Country = marketing_paises$Country)
+
+# Creamos la compra total
+marketing <- marketing |> mutate(TotalPurchases = NumDealsPurchases + NumWebPurchases + NumCatalogPurchases + NumStorePurchases)
+```
+
+Para responder a esta pregunta haremos una gráfica donde visualizaremos las compras totales según los países.
+
+```{r}
+# Agrupar el dataframe por país y ordenar por el número de compras
+marketing_paises <- marketing |> 
+  group_by(Country) |> 
+  arrange(desc(TotalPurchases))
+
+
+# Gráfico de barras de país segun el numero de compras totales
+marketing_paises |> 
+  ggplot(aes(x = reorder(Country, TotalPurchases), y=TotalPurchases)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Numero total de compras por pais", x = "Pais", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+```
+
+Observamos que españa es el país que más compras realizan es España, mientras que US se sitúa en la penúltima posición.
+
+```{r}
+# Gráfico de barras de país segun el numero de gastos totales
+marketing_paises |> 
+  ggplot(aes(x = reorder(Country, TotSpent), y=TotSpent)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Numero total de dinero gastado por pais", x = "Pais", y = NULL) +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+```
+
+En cuanto al dinero gastado vemos que igualmente España es el país que más dinero se gasta mientras que US sigue siendo el penúltimo.
+
+Por tanto, podemos decir que a US no le va mejor que al resto de países en terminos de compras totales.
+
+### Responda al siguiente enunciado (I):
+
+**Su supervisor insiste en que las personas que compran oro son más conservadoras. Por lo tanto, las personas que gastaron una cantidad superior al promedio en oro en los últimos 2 años tendrían más compras en la tienda. Justificar o refutar esta afirmación utilizando una prueba estadística apropiada.**
+
+```{r}
+  marketing_paises |> ggplot(aes(x = Gold, y = NumStorePurchases)) +
+  geom_point(col = "#EB9891") + 
+  geom_smooth(method = "lm", se = FALSE, color = "black", aes(group = 1)) +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Vemos mediante la anterior gráfica que el número de compras en la tienda y el oro tienen correlación positiva, por lo que sí podríamos decir que las personas que compran más oro suelen comprar más en las tiendas físicas.
+
+```{r}
+library(psych)
+
+kendall_corr <- cor(marketing_paises$Gold, marketing_paises$NumStorePurchases, method = 'kendall')
+kendall_pvalue <- cor.test(marketing_paises$Gold, marketing_paises$NumStorePurchases, method = 'kendall')
+
+# print results
+print(paste0('Kendall correlation (tau): ', kendall_corr))
+print(paste0('Kendall p-value: ', kendall_pvalue$p.value))
+```
+
+Mediante el test Kendall, nos da un p-valor inferior de 0.05 por lo que podemos rechazar la hipótesis nula y confirmar que ambas variables tienen una relación positiva estadísticamente significativa.
+
+### Responda al siguiente enunciado (II):
+
+**El pescado tiene ácidos grasos Omega 3 que son buenos para el cerebro. En consecuencia, ¿los «candidatos a doctorado casados» tienen una relación significativa con la cantidad gastada en pescado?**
+
+Para ello primeramente creamos dos tablas, una solo con los que están casados y son doctorados y otra tabla con los clientes que no los son.
+
+```{r}
+marketing_bruto_casadoctorado <- marketing_bruto|> filter(Marital_Status== "Married" & Education =="PhD")
+
+marketing_bruto_casadoctoradono <- marketing_bruto|> filter(!(Marital_Status== "Married" & Education =="PhD"))
+```
+
+De esta forma los podremos comparar mediante una gráfica y ver si realmente influyen en la compra de pescados a esas características del cliente
+
+```{r}
+# Gráfica de la compra de pescado de los casados y doctorados
+marketing_bruto_casadoctorado |> 
+  ggplot(aes(x= MntFishProducts)) +
+  geom_boxplot(col = "#EB9891") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+
+# Gráfica de la compra de pescado de los no que son a la vez casados y doctorados
+marketing_bruto_casadoctoradono |> 
+  ggplot(aes(x = MntFishProducts)) +
+  geom_boxplot(col = "#EB9891") +
+  theme_minimal() + 
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Comprobando las dos gráficas, no vemos que aumente la compra de productos de pescado por ser casado y doctorado.
+De hecho, la mediana de compras de pescado en los casados doctorados se ve reducida.
+
+Para comprobarlo numéricamente vamos a utilizar un test de diferencia significativa entre esos dos grupos en términos de media
+
+```{r}
+pval <- t.test(marketing_bruto_casadoctorado$MntFishProducts, marketing_bruto_casadoctoradono$MntFishProducts)$p.value
+cat("t-test p-value: ", round(pval, 3))
+```
+
+Vemos un p-valor menor del 0.05(si fijamos allí el nivel de significatividad), por lo que rechazamos la hipótesis nula y afirmamos que los dos grupos son diferentes en términos de media.
+Donde los que no están casados y son doctores a la vez tienden a consumir más en productos de pescados que los que sí lo son.
+
+**¿Qué otros factores están significativamente relacionados con la cantidad gastada en pescado? (Sugerencia: use su conocimiento de las variables / efectos de interacción)**
+
+Nuevamente podemos recurrir a nuestro análisis de componentes principales realizado previamente.
+
+```{r}
+# Añadimos los componentes seleccionados a nuestro dataset de variables estandarizadas
+  marketing_rank |> 
+  mutate(PC1= componentes$PC1 , PC2 = componentes$PC2, 
+         PC3 =componentes$PC3, PC4=componentes$PC4) |> cor()
+```
+
+Como resultado de la tabla, vemos que depende bastante de las variables de compras de otro tipos de productos.
+Por lo que si los clientes aumenta sus compras en otros tipos de prodcutos también tiende comprar más en productos de pescado.
+Y también suelen comprar más pescado si compra según el catálogo.
+
+### ¿Existe una relación significativa entre la región geográfica y el éxito de una campaña?
+
+Para responder a esta pregunta tendremos que saber el porcentaje de aceptación de cada una de las campañas realizadas en cada uno de los países
+
+```{r}
+marketing_exito  <- read_delim(file = "./marketing_data.csv", delim = ",")
+
+# Calculamos el porcentaje de aceptación de las 6 campañas agrupados por países
+porcentaje1 <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(AcceptedCmp1) * 100)
+porcentaje2 <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(AcceptedCmp2) * 100)
+porcentaje3 <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(AcceptedCmp3) * 100)
+porcentaje4 <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(AcceptedCmp4) * 100)
+porcentaje5 <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(AcceptedCmp5) * 100)
+porcentajefinal <- marketing_exito |> group_by(Country) |> 
+  dplyr::summarize(por=  mean(Response) * 100)
+```
+
+Una vez que tenemos esos datos los mostraremos en gráficas para poder visualizarlo y entenderlo de una manera más rapida y sencilla.
+
+```{r}
+porcentaje1 |> 
+  ggplot(aes(x = Country, y =por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la primera campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+
+porcentaje2 |> 
+  ggplot(aes(x = Country, y=por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la segunda campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+
+porcentaje3 |> 
+  ggplot(aes(x = Country, y=por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la tercera campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+
+porcentaje4 |> 
+  ggplot(aes(x = Country, y=por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la cuarta campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+
+porcentaje5 |> 
+  ggplot(aes(x = Country, y=por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la quinta campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+
+porcentajefinal |> 
+  ggplot(aes(x = Country, y=por)) +
+  geom_bar(stat='identity' ,alpha = .8, fill="#EB9891") +
+  labs(title = "Clientes que han aceptado la última campaña", x = "Pais", y = "%") +
+  theme_minimal() +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5)) + 
+  scale_linetype_manual(name = "Medidas", values = c(Media = "solid", Mediana = "dotted")) 
+```
+
+Observamos que el porcentaje de respuestas media suele ser baja, a excepción de la última campaña.
+
+Vemos que el porcentaje de aceptacion de paises suelen ser iguales, a excepcion de México que solo ronda en porcentaje de 0 o un porcentaje alto, esto podria ser debido a que no se ha hecho campañas en esas temporadas, pero cuando se hace alguna campaña en México el nivel de respuesta suele ser relativamente superior al resto de los países.
+
+## Tarea 3: Visualización de los datos
+
+### ¿Qué campaña de marketing tiene más éxito?
+
+```{r}
+# Calculamos el éxito de cada campaña en porcentaje
+success <- 
+  data.frame(colMeans(marketing[c("AcceptedCmp1", "AcceptedCmp2", "AcceptedCmp3", "AcceptedCmp4", "AcceptedCmp5", "Response")])*100)
+colnames(success) <- "Percent"
+success <-
+  pivot_longer(success, Percent, names_to = "Campaign")
+success$Campaign <- c("AcceptedCmp1", "AcceptedCmp2", "AcceptedCmp3", "AcceptedCmp4", "AcceptedCmp5", "Response")
+
+# Ploteamos el resultado
+success |> 
+  ggplot(aes(x = value, y = reorder(Campaign, value))) + 
+  geom_bar(stat = "identity", fill = "#56BCC2") + 
+  xlab("Aceptación (%)") + 
+  ylab("Campaña") +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+Como se puede observar en el gráfico, **la campaña que más éxito tuvo** fue la **última** que lanzó la compañía.
+Esta campaña está recogida en la variable `Response`.
+
+### ¿Cómo es el cliente promedio para esta empresa?
+
+```{r}
+mean <-
+  data.frame(colMeans(marketing[c("Education", "Marital_Status", "Income", "Kidhome", 
+                                "Teenhome", "Recency", "Seniority", "Age", "Children", 
+                                "Family_Size")]))
+colnames(mean) <- "Mean"
+mean
+```
+
+Basándonos en la media de todos nuestras variables, **el cliente promedio para la empresa tiene las siguientes características**:
+
+-   El cliente promedio tiene estudios de **posgrado** (0.8).
+-   El cliente promedio **vive en pareja** (0.6).
+-   El cliente promedio cobra al año **51 630 \$**.
+-   El cliente promedio **tiene hijos** (0.95), de los cuales prácticamente **al 50 % son niños o adolescentes**.
+-   El cliente promedio tiene una familia de **2.6 miembros**.
+-   El cliente promedio ha comprado alguno de nuestros productos **en los últimos 49 días**.
+-   El cliente promedio tiene una antigüedad de **11 meses** en la empresa.
+-   El cliente promedio tiene una edad de **54 años**.
+
+### ¿Qué productos están funcionando mejor?
+
+```{r}
+marketing$TotPurchases <- 
+  marketing$NumWebPurchases + marketing$NumCatalogPurchases + marketing$NumStorePurchases + marketing$NumDealsPurchases
+mean <-
+  data.frame(colMeans(marketing[c("Wines", "Fruits", "Meat", "Fish", "Sweets", "Gold", "TotSpent")]))
+colnames(mean) <- "Mean"
+mean <-
+  pivot_longer(mean, Mean, names_to = "Products")
+mean$Products <- c("Wines", "Fruits", "Meat", "Fish", "Sweets", "Gold", "TotSpent")
+mean
+```
+
+Basándonos en la media de todos nuestras variables, **el cliente promedio gasta**:
+
+-   El cliente promedio gasta **563 \$** en **total**.
+-   El cliente promedio gasta **304 \$** en el **sector vinícola**.
+-   El cliente promedio gasta **26 \$** en **frutas**.
+-   El cliente promedio gasta **167 \$** en **carne**.
+-   El cliente promedio gasta **38 \$** en **pescado**.
+-   El cliente promedio gasta **27 \$** en **dulces**.
+-   El cliente promedio gasta **44 \$** en productos de **joyería y oro**.
+
+```{r}
+mean |> 
+  head(n = 6) |> 
+  ggplot(aes(x = value, y = reorder(Products, value))) + 
+  geom_bar(stat = "identity", fill = "#56BCC2") + 
+  xlab("Total de compras") + 
+  ylab("Producto") +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+En este sentido, el producto que **mejor funciona son los vinos** (`Wines`), seguidos de la **carne** (`Meat`) y de los productos de **joyería y oro** (`Gold`).
+
+### ¿Qué canales tienen un rendimiento inferior?
+
+Entendemos por «canales» los diferentes medios a través de los cuales vende la empresa y sus diferentes campañas de marketing.
+
+```{r}
+channels <- 
+  data.frame(colMeans(marketing[c("AcceptedCmp1", "AcceptedCmp2", "AcceptedCmp3", "AcceptedCmp4", 
+                                  "AcceptedCmp5", "Response", "NumDealsPurchases", "NumWebPurchases", 
+                                  "NumCatalogPurchases", "NumStorePurchases", "NumWebVisitsMonth", "TotPurchases")]))
+colnames(channels) <- "Mean"
+channels <-
+  pivot_longer(channels, Mean, names_to = "Channels")
+channels$Channels <- c("AcceptedCmp1", "AcceptedCmp2", "AcceptedCmp3", "AcceptedCmp4", 
+                      "AcceptedCmp5", "Response", "NumDealsPurchases", "NumWebPurchases", 
+                      "NumCatalogPurchases", "NumStorePurchases", "NumWebVisitsMonth", "TotPurchases")
+channels
+```
+
+Basándonos en la media de todos nuestras variables, **el cliente promedio compra**:
+
+-   El cliente promedio compra **15** productos en **total**.
+-   El cliente promedio compra **2** productos en **oferta**.
+-   El cliente promedio compra **4** productos a través de la **web**.
+-   El cliente promedio compra **2** productos por **catálogo**.
+-   El cliente promedio compra **5** productos en **tienda**.
+-   El cliente promedio visita la web **5** veces por mes.
+-   El cliente promedio **no ha aceptado ninguna de nuestras campañas de marketing**.
+
+```{r}
+channels |> 
+  head(n = 11) |> 
+  ggplot(aes(x = value, y = reorder(Channels, value))) + 
+  geom_bar(stat = "identity", fill = "#56BCC2") + 
+  xlab("Total de compras") + 
+  ylab("Producto") +
+  theme_minimal()  +
+  theme(text = element_text(face = "bold", size = 15), plot.title = element_text(hjust = 0.5), 
+        axis.title.x = element_text(vjust=-0.5))
+```
+
+En este sentido, **los peores canales en los que ha invertido la empresa** serían sus **seis campañas de marketing**, seguidos de los **productos que vende en oferta** (`NumDealsPurchases`) y de los **productos en venta por catálogo** (`NumCatalogPurchases`).
+
+## Tarea 4: Recomendaciones y conclusiones
+
+En esta última sección presentamos las **principales conclusiones** a las que se han llegado una vez analizado el dataset de la empresa.
+Lo que haremos será destacar las **relaciones más importantes** que se han ido advirtiendo durante las fases del **análisis exploratorio** y del **análisis clúster** para luego aportar nuestras propias **recomendaciones** y **sugerencias**.
+En este sentido, el objetivo último será proporcionar al CMO las **claves principales** de la empresa a fin de **conocer mejor a sus propios clientes** y poder **actuar en consecuencia**.
+La sección estará dividida en cuatro apartados, los **cuatro pilares** que hemos creído más relevantes a la hora de proporcionar recomendaciones a la empresa: los **productos** que tiene a la venta, los **canales** a través de los cuales los distribuye, las **campañas de marketing** que ha ido lanzando, y la **tipología de los clientes** a los que se dirige.
+
+### Productos a la venta
+
+Los **productos** que la empresa tiene a la venta son los siguientes: `Wines`, `Fruits`, `Meat`, `Fish`, `Sweets` y `Gold`.
+Hemos podido detectar cómo los productos **más exitosos** (en los que el cliente promedio gasta más) son los **productos vinícolas** (`Wines`) y las **carnes** (`Meat`).
+No se han detectado diferencias en el consumo de los distintos productos en función de los clústeres de clientes.
+En este sentido, **el cliente que consume poco en general, consume poco también en cualquiera de los cinco productos de la empresa (y viceversa)**.
+No se han detectado tampoco **diferencias** en relación al **número de hijos** o al tamaño familiar del cliente, como podría haber sucedido perfectamente con un sector tan infantil como el de los **dulces** (`Sweets`).
+
+<font color='green'>**Recomendaciones**</font>: Dado que los productos más populares son los vinos y las carnes, lo que se propone es **encaminar las próximas campañas publicitarias de la empresa a tratar de impulsar el resto de productos**, si es que desde la cúpula directiva se quiere seguir con la estrategia de **diversificación** en la que ya está inmersa la empresa.
+Otra posible estrategia a seguir sería el **tratar de especializarse** en los productos que ya funcionan y abandonar el resto.
+Esta empresa podría transformarse en una **compañía proveedora de vinos y carnes** a través de distintas tácticas de especialización, como la creación de **nuevas gamas y líneas de producto** adaptadas a los **cuatro clústeres de clientes que hemos identificado**, la **penetración en el mercado** reconsiderando la **competencia** a la que se debe enfrentar ahora la empresa, o el diseño de una **nueva imagen de marca** que represente los productos sobre los que se ha decidido **especializar**.
+
+### Canales de venta
+
+Los **canales** a través de los cuales vende la empresa son los siguientes: `DealsPurchases`, `WebPurchases`, `CatalogPurchases` y `StorePurchases`.
+Durante las fases de análisis, se ha podido detectar cómo los canales que **mejor funcionan** para la empresa (a través de los cuales el cliente promedio compra más) son las **ventas en tienda** (`StorePurchases`) y las **ventas a través de su web** (`WebPurchases`).
+Estas variables mantenían correlaciones positivas con el gasto total de los clientes (`TotSpent`) y su nivel económico (`Income`).
+Se ha detectado también que los clientes con **menor nivel económico** y **menor nivel de gasto** son los que **más visitas** realizan a la página web de la compañía (`NumWebVisitsMonth`).
+Además, durante el análisis de esta variable registramos una posible **anomalía**: la variable `NumWebVisitsMonth` está **incorrelada** con la variable `NumWebPurchases`, y mantiene una **correlación negativa** con `TotSpent`.
+**Era de esperar que a más visitas reciba la web, más compras se realizaran, pero esta relación no se produce.**
+
+<font color='green'>**Recomendaciones**</font>: Dado que la mayoría de las ventas se producen en tienda o a través de la página web, lo que se propone es **reforzar estos canales de venta por medio del lanzamiento de campañas publicitarias** destinadas exclusivamente a estos canales, o a través del **lanzamiento de ofertas y promociones** que incentiven la compra en tiendas o en la página web.
+La **compra por catálogo parece estar muy desactualizada** y podría reservarse únicamente para **compras al por mayor o para proveer a otros establecimientos minoristas**.
+Las **ofertas o descuentos**, a parte de tener que ir encaminadas a **reforzar los canales de venta en tienda y página web**, también deberían estar orientados a **captar y fidelizar** determinados tipos de clientes según los clústeres identificados.
+A modo de ejemplo, para la **página web** se podrían implementar **envíos gratis para aquellos clientes que hagan un gasto superior a una determinada cantidad**, y para las **tiendas** los clásicos **descuentos porcentuales** o la implementación de **técnicas de cross-sell** entre los **distintos productos de la compañía** (teniendo siempre en cuenta nuestro **CRM** y la **puntuación** asociada al cliente según nuestro **modelo RFM**).
+En la última sección, en la que hablaremos de las distintas tipologías de cliente que presenta la empresa, ahondaremos un poco más en esta cuestión.
+
+### Campañas publicitarias
+
+En base a nuestro dataset, la empresa ha lanzado en total **6 campañas de marketing**: `AcceptedCmp1`, `AcceptedCmp2`, `AcceptedCmp3`, `AcceptedCmp4`, `AcceptedCmp5` y `Response`.
+De todas ellas, la que más éxito ha tenido ha sido la última (`Response`), con **casi un 15 % de aceptación**.
+En este sentido, convendría centrarnos únicamente en la última campaña realizada por la empresa porque **el resto** no llegó a superar **el 8 %** de aceptación.
+Además, según la información que pudimos extraer recientemente de la variable `Country`, esta misma campaña fue **todo un éxito en el país de México**: **más del 60 % de los clientes la aceptaron**.
+La **mediana** del **nivel económico** de aquellos que **aceptaron** esta campaña es **bastante superior** de aquellos que la **rechazaron** (correlaciona de manera positiva).
+Por otro lado, las campañas **correlacionan de manera negativa** con aquellos clientes que tienen **hijos**.
+
+<font color='green'>**Recomendaciones**</font>: Dado que la última campaña lanzada por la empresa en México supuso un porcentaje de aceptación de **más del 60 %**, se propone **analizar bien el contenido de la campaña** y **replicarla** en otros países.
+Además, en vista de las correlaciones que mantienen estas variables con el resto, convendría **segmentar** las próximas campañas en base a dos características principales del cliente: su **nivel económico** y **si tiene o no hijos**.
+En este sentido, proponemos **dos tipos de campañas publicitarias principales**: una de ellas para clientes con un tren de vida elevado, con **altos ingresos** y **sin hijos**; y una segunda para clientes con un **nivel de ingresos más modesto**, pero con una **familia más numerosa y con hijos**.
+Estas dos campañas se podrían complementar con ofertas **adaptadas al perfil del cliente**, teniendo en cuenta sus **gustos** o **la edad de sus hijos** en función de si son adolescentes o niños más pequeños.
+
+### Tipología del cliente
+
+Para el análisis de la **tipología del cliente** en esta empresa, emplearemos una de las mejores segmentaciones que obtuvimos al aplicar los distintos algoritmos de agrupamiento a las características del cliente.
+En este caso, segmentaremos en función de su **nivel económico** (`Income`), de su **antigüedad** como cliente registrado (`Seniority`), y de su **nivel total de gasto** en productos de la empresa (`TotSpent`).
+
+```{r echo=FALSE}
+# Creamos la trama para la representación gráfica
+trace <- plot_ly(marketing_gmm, x = ~Income, y = ~Seniority, z = ~Spending, 
+                 type = 'scatter3d', mode = 'markers', 
+                 marker = list(size = 5, line = list(color = 'black', width = 1),
+                 color = as.factor(marketing_gmm$clusteres_agg_gmm), colors = c("red","#2E9FDF", "yellow", "green")))
+
+# Establecemos el layout del gráfico
+layout <- 
+  list(scene = list(xaxis = list(title = 'Income'), 
+                    yaxis = list(title = 'Seniority'), 
+                    zaxis = list(title = 'Spending')), 
+       margin = list(l = 0, r = 0), height = 800, width = 800)
+
+# Unimos y mostramos la figura
+plotly::subplot(trace, layout = layout)
+```
+
+Recordemos los distintos clústeres que nos ha proporcionado esta segmentación:
+
+-   El **Clúster 1 (naranja)** está compuesto por clientes con un nivel económico elevado, con una elevada cantidad de gasto y con gran antigüedad como clientes **(Stars)**.
+-   El **Clúster 2 (blanco)** está compuesto por clientes con un nivel económico elevado, con una elevada cantidad de gasto, pero con menor antigüedad como clientes **(High potential)**.
+-   El **Clúster 3 (amarillo)** está compuesto por clientes con un nivel económico bajo, con una pequeña cantidad de gasto, pero con mayor antigüedad como clientes **(Need attention)**.
+-   El **Clúster 4 (rojo)** está compuesto por clientes con un nivel económico bajo, con una pequeña cantidad de gasto y con baja antigüedad como clientes **(Leaky bucket)**.
+
+<font color='green'>**Recomendaciones**</font>: Gracias a esta segmentación, identificamos claramente las cuatro tipologías de cliente que habíamos visto en clase: **Stars**, **High potential**, **Need attention** y **Leaky bucket**.
+A grandes rasgos, a los clientes **Stars** deberemos saber mantenerlos; a los clientes **High potential** deberemos apoyarlos en el proceso para convertirlos en Stars; a los **Need attention** deberemos fidelizarlos; y, por último, a los **Leaky bucket** captarlos con tal de que comiencen a confiar en la marca.
+
+¿Cómo lo haremos?
+se proponen distintas estrategias:
+
+#### Cliente Star
+
+Este tipo de clientes son los **más valiosos** dentro de la empresa, por lo que resulta importante mantenerlos **comprometidos y fieles a la marca**.
+Algunas estrategias que se nos ocurren para poder mantenerlos podrían ser: (1) ofrecerles un **servicio de atención al cliente** personalizado y dedicado, (2) organizar **eventos exclusivos** para clientes VIP, (3) ofrecerles **descuentos exclusivos y personalizados** dentro del programa de lealtad de la propia empresa, (4) enviarles **comunicaciones personalizadas y adaptadas a sus gustos** por medio del newsletter de la empresa, o, incluso, (5) hacerles formar parte de la propia empresa pidiéndoles **retroalimentación** para mejorar continuamente los productos que más consumen y sus propios servicios.
+
+Son clientes con una antigüedad elevada, por lo que la empresa debería aprovecharse de lo que conocen de ellos con tal de poder personalizar su propia experiencia.
+
+#### Cliente High potential
+
+Este tipo de clientes tienen el **potencial** de convertirse en clientes Stars, por lo que resulta importante **invertir en ese proceso de transformación**.
+Algunas estrategias que se nos ocurren para poder apoyarlos podrían ser: (1) ofrecerles **pruebas gratuitas** de nuevos productos o servicios, (2) organizar **capacitaciones especiales** para ayudarles a sacar el máximo provecho de los productos que más compran, (3) ofrecerles **descuentos y promociones especiales** con tal de que no olviden la marca, (4) **comunicarles las últimas novedades y actualizaciones** para que puedan seguir el devenir de la empresa.
+
+En definitiva, las estrategias hacia este segmento de clientes deben ir encaminadas a que el cliente **no olvide a la empresa y adquiera los puntos de confianza que le faltan para convertirse en un cliente Star**.
+
+#### Cliente Need attention
+
+Estos clientes son aquellos con **mayor antigüedad**, pero con un **nivel económico más bajo** y, por lo general, un **nivel de gasto también más reducido**.
+Se ha detectado también en la segmentación algunos clientes con un nivel económico relativamente bajo, pero con un nivel de gasto elevado.
+Para estos casos, podríamos intentar aplicarles la estrategia de marketing definida inicialmente para los clientes Stars con tal de que **mantengan ese mismo nivel de gasto**.
+
+Para el resto de clientes **Need attention**, se proponen las siguientes estrategias: (1) introducirles en el **programa de fidelización** para clientes antiguos, con beneficios exclusivos como descuentos, promociones, etc., (2) ofrecerles **opciones de financiación asequibles** para ayudarles a comprar los productos o servicios de mayor precio, (3) ofrecerles un **servicio de atención al cliente** que esté disponible para ayudarles a encontrar soluciones o opciones de reparación de productos **asequibles**.
+
+En general, lo importante es tener en cuenta que estos clientes disponen de un **presupuesto limitado**, por lo que es importante ofrecerles **opciones asequibles** y estar disponible para ayudarles a encontrar soluciones no demasiado caras a sus problemas.
+
+#### Cliente Leaky bucket
+
+Estos clientes son aquellos con **menor antigüedad**, con un **nivel económico más bajo** y, por lo general, un **nivel de gasto también más reducido**.
+Suelen clientes, o bien recientes, o bien con un riesgo elevado de abandonar la empresa (About to sleep), o bien clientes de compra intermitente.
+En este caso concreto, lo importante será tratar de **retenerlos** antes de que sea demasiado tarde.
+Algunas estrategias que se nos ocurren para tratar de que se queden podrían ser: (1) introducirles en el programa de fidelización para incentivarles con recompensas por hacer **varias compras en un periodo determinado de tiempo**, (2) enviarles **comunicaciones personalizadas y adaptadas a sus gustos** por medio del newsletter de la empresa con tal de no perder el contacto, (3) investigar posibles **problemas de insatisfacción** que puedan ser consecuencia del abandono de este tipo de clientes y tratar de remediarlos de algún modo.
+
+```{r echo=FALSE}
+rfm_scores
+```
+
+Todas estas estrategias deben estar **sincronizadas** con los **sistemas de puntuación RFM**, de manera que a cada cliente nuevo que entre en la empresa el sistema lo **puntúe**, lo clasifique automáticamente en el **clúster adecuado** y se comiencen a desplegar **las estrategias que le correspondan. Todo con tal de personalizar la experiencia del cliente.**
+
+<font color='green'>**¡Muchas gracias por la atención!**</font>
